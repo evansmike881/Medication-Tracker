@@ -140,6 +140,22 @@ compact_rows: false
 max_rows: 6
 ```
 
+There is also a second custom card for a more minimal weekly pill-box layout. It is designed for one selected person or pet and groups medications into seven day boxes:
+
+```yaml
+type: custom:medication-tracker-weekly-card
+entity: sensor.medication_tracker_medication_registry
+title: Weekly Pill Box
+profile_name: Mike
+show_summary: true
+show_times: true
+show_dosage: true
+show_status_chip: true
+show_actions: true
+collapsible_items: true
+expand_today: true
+```
+
 If the card does not appear immediately after updating, add it manually as a Lovelace resource:
 
 ```yaml
