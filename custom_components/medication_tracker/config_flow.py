@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.const import CONF_TITLE
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.util import slugify
 
 from .const import (
     ATTR_DATABASE_ENTRY_ID,
@@ -75,7 +72,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
         """Return the live manager for this config entry."""
         return self.hass.data[DOMAIN][self.config_entry.entry_id]["manager"]
 
-    async def async_step_init(self, user_input: dict[str, Any] | None = None):
+    async def async_step_init(self, user_input: dict | None = None):
         """Show the management menu."""
         return self.async_show_menu(
             step_id="init",
@@ -86,7 +83,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
             ],
         )
 
-    async def async_step_add_medication_pick_database(self, user_input: dict[str, Any] | None = None):
+    async def async_step_add_medication_pick_database(self, user_input: dict | None = None):
         """Pick a bundled medication or continue with a custom entry."""
         if user_input is not None:
             self._selected_database_entry_id = user_input[ATTR_DATABASE_ENTRY_ID]
@@ -111,7 +108,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
             ),
         )
 
-    async def async_step_add_medication(self, user_input: dict[str, Any] | None = None):
+    async def async_step_add_medication(self, user_input: dict | None = None):
         """Add a medication from the backend UI."""
         database_entry = None
         if self._selected_database_entry_id != CUSTOM_DATABASE_OPTION:
@@ -142,7 +139,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
         default_name = database_entry["name"] if database_entry else ""
         default_dosage = database_entry["default_dosage"] if database_entry else ""
         default_notes = database_entry["notes"] if database_entry else ""
-        default_id = slugify(default_name) if default_name else ""
+        default_id = self._slugify(default_name) if default_name else ""
         return self.async_show_form(
             step_id="add_medication",
             data_schema=vol.Schema(
@@ -165,7 +162,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
             ),
         )
 
-    async def async_step_edit_medication_select(self, user_input: dict[str, Any] | None = None):
+    async def async_step_edit_medication_select(self, user_input: dict | None = None):
         """Choose a medication to edit."""
         medications = list(self._manager.list_medications())
         if not medications:
@@ -181,7 +178,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema({vol.Required(ATTR_MEDICATION_ID): vol.In(options)}),
         )
 
-    async def async_step_edit_medication(self, user_input: dict[str, Any] | None = None):
+    async def async_step_edit_medication(self, user_input: dict | None = None):
         """Edit an existing medication."""
         medication = self._manager.medications[self._selected_medication_id]
         if user_input is not None:
@@ -227,7 +224,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
             ),
         )
 
-    async def async_step_remove_medication_select(self, user_input: dict[str, Any] | None = None):
+    async def async_step_remove_medication_select(self, user_input: dict | None = None):
         """Choose a medication to remove."""
         medications = list(self._manager.list_medications())
         if not medications:
@@ -254,3 +251,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
         if raw_value in {"", None}:
             return None
         return float(raw_value)
+
+    def _slugify(self, value: str) -> str:
+        """Create a simple slug without relying on optional HA helpers."""
+        return "_".join("".join(ch.lower() if ch.isalnum() else " " for ch in value).split())
