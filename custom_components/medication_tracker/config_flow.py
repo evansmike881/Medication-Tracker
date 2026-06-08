@@ -69,14 +69,14 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
 
     def __init__(self, config_entry) -> None:
         """Initialize the options flow."""
-        self.config_entry = config_entry
+        self._config_entry = config_entry
         self._selected_database_entry_id = CUSTOM_DATABASE_OPTION
         self._selected_medication_id = None
 
     @property
     def _runtime(self):
         """Return runtime data for this config entry."""
-        return self.hass.data[DOMAIN][self.config_entry.entry_id]
+        return self.hass.data[DOMAIN][self._config_entry.entry_id]
 
     @property
     def _manager(self):
