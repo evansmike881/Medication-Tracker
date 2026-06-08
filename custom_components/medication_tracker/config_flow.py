@@ -273,6 +273,10 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_add_medication_advanced(self, user_input=None):
         """Capture optional advanced settings and save the medication."""
+        database_entry = None
+        if self._selected_database_entry_id != CUSTOM_DATABASE_OPTION:
+            database_entry = self._manager.get_database_entry(self._selected_database_entry_id)
+
         if user_input is not None:
             self._draft.update(user_input)
             await self._manager.async_add_medication(
