@@ -6,6 +6,11 @@
       "aliases": ["Paracetamol", "Tylenol"],
       "default_dosage": "500 mg",
       "category": "Pain relief",
+      "purpose": "General pain and fever relief.",
+      "form": "Tablet",
+      "strength_options": ["325 mg", "500 mg"],
+      "instructions": "Follow the labeled maximum daily dose and avoid doubling up with other acetaminophen products.",
+      "with_food": "With or without food",
       "notes": "General pain and fever relief."
     },
     {
@@ -14,6 +19,11 @@
       "aliases": ["Advil", "Motrin"],
       "default_dosage": "200 mg",
       "category": "Pain relief",
+      "purpose": "Pain, inflammation, and fever relief.",
+      "form": "Tablet",
+      "strength_options": ["200 mg", "400 mg"],
+      "instructions": "Often taken with food if it causes stomach upset.",
+      "with_food": "Usually with food",
       "notes": "Often taken with food if it causes stomach upset."
     },
     {
@@ -22,6 +32,11 @@
       "aliases": ["Amoxil"],
       "default_dosage": "500 mg",
       "category": "Antibiotic",
+      "purpose": "Antibiotic used for a range of bacterial infections.",
+      "form": "Capsule",
+      "strength_options": ["250 mg", "500 mg"],
+      "instructions": "Complete the full prescribed course and take doses evenly through the day.",
+      "with_food": "With or without food",
       "notes": "Complete the full prescribed course."
     },
     {
@@ -30,6 +45,11 @@
       "aliases": ["Prinivil", "Zestril"],
       "default_dosage": "10 mg",
       "category": "Blood pressure",
+      "purpose": "Blood pressure and heart support.",
+      "form": "Tablet",
+      "strength_options": ["5 mg", "10 mg", "20 mg"],
+      "instructions": "Commonly taken once daily at a consistent time.",
+      "with_food": "With or without food",
       "notes": "Commonly taken once daily."
     },
     {
@@ -38,6 +58,11 @@
       "aliases": ["Glucophage"],
       "default_dosage": "500 mg",
       "category": "Diabetes",
+      "purpose": "Blood sugar support for type 2 diabetes.",
+      "form": "Tablet",
+      "strength_options": ["500 mg", "850 mg", "1000 mg"],
+      "instructions": "Often taken with meals to reduce stomach upset.",
+      "with_food": "Usually with meals",
       "notes": "Often taken with meals."
     },
     {
@@ -46,6 +71,11 @@
       "aliases": ["Lipitor"],
       "default_dosage": "20 mg",
       "category": "Cholesterol",
+      "purpose": "Cholesterol management.",
+      "form": "Tablet",
+      "strength_options": ["10 mg", "20 mg", "40 mg"],
+      "instructions": "Usually taken once daily.",
+      "with_food": "With or without food",
       "notes": "Usually taken once daily."
     },
     {
@@ -54,6 +84,11 @@
       "aliases": ["Synthroid"],
       "default_dosage": "50 mcg",
       "category": "Thyroid",
+      "purpose": "Thyroid hormone replacement.",
+      "form": "Tablet",
+      "strength_options": ["25 mcg", "50 mcg", "75 mcg", "100 mcg"],
+      "instructions": "Often taken on an empty stomach before breakfast.",
+      "with_food": "Usually on an empty stomach",
       "notes": "Often taken on an empty stomach."
     },
     {
@@ -62,6 +97,11 @@
       "aliases": ["Prilosec"],
       "default_dosage": "20 mg",
       "category": "Reflux",
+      "purpose": "Acid reflux and stomach acid control.",
+      "form": "Capsule",
+      "strength_options": ["10 mg", "20 mg", "40 mg"],
+      "instructions": "Typically taken before meals, often before breakfast.",
+      "with_food": "Usually before meals",
       "notes": "Typically taken before meals."
     },
     {
@@ -70,6 +110,11 @@
       "aliases": ["Zyrtec"],
       "default_dosage": "10 mg",
       "category": "Allergy",
+      "purpose": "Allergy symptom relief.",
+      "form": "Tablet",
+      "strength_options": ["5 mg", "10 mg"],
+      "instructions": "Used for allergy symptom relief and often taken once daily.",
+      "with_food": "With or without food",
       "notes": "Used for allergy symptom relief."
     },
     {
@@ -78,6 +123,11 @@
       "aliases": ["Claritin"],
       "default_dosage": "10 mg",
       "category": "Allergy",
+      "purpose": "Allergy symptom relief.",
+      "form": "Tablet",
+      "strength_options": ["10 mg"],
+      "instructions": "Commonly taken once daily.",
+      "with_food": "With or without food",
       "notes": "Non-drowsy allergy medication for many people."
     },
     {
@@ -86,6 +136,11 @@
       "aliases": ["Zoloft"],
       "default_dosage": "50 mg",
       "category": "Mental health",
+      "purpose": "Mental health support as prescribed.",
+      "form": "Tablet",
+      "strength_options": ["25 mg", "50 mg", "100 mg"],
+      "instructions": "Take consistently at the same time each day.",
+      "with_food": "With or without food",
       "notes": "Take consistently at the same time each day."
     },
     {
@@ -94,6 +149,11 @@
       "aliases": ["Prozac"],
       "default_dosage": "20 mg",
       "category": "Mental health",
+      "purpose": "Mental health support as prescribed.",
+      "form": "Capsule",
+      "strength_options": ["10 mg", "20 mg", "40 mg"],
+      "instructions": "Often taken once per day at a consistent time.",
+      "with_food": "With or without food",
       "notes": "Often taken once per day."
     },
     {
@@ -102,6 +162,11 @@
       "aliases": [],
       "default_dosage": "10 mg",
       "category": "Steroid",
+      "purpose": "Steroid support for inflammation and immune response.",
+      "form": "Tablet",
+      "strength_options": ["5 mg", "10 mg", "20 mg"],
+      "instructions": "Follow taper instructions exactly if prescribed.",
+      "with_food": "Usually with food",
       "notes": "Follow taper instructions exactly if prescribed."
     },
     {
@@ -110,6 +175,11 @@
       "aliases": ["Ventolin", "ProAir"],
       "default_dosage": "2 puffs",
       "category": "Respiratory",
+      "purpose": "Rescue inhaler for breathing symptoms.",
+      "form": "Inhaler",
+      "strength_options": ["1 puff", "2 puffs"],
+      "instructions": "Often used as a rescue inhaler as prescribed.",
+      "with_food": "Not food-related",
       "notes": "Often used as a rescue inhaler."
     },
     {
@@ -118,6 +188,11 @@
       "aliases": ["Lantus", "Basaglar"],
       "default_dosage": "As prescribed",
       "category": "Diabetes",
+      "purpose": "Long-acting insulin support.",
+      "form": "Injection",
+      "strength_options": ["As prescribed"],
+      "instructions": "Use exactly as prescribed and keep storage guidance in mind.",
+      "with_food": "Follow prescriber guidance",
       "notes": "Long-acting insulin."
     }
   ]

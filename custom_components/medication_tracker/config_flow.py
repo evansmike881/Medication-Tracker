@@ -11,8 +11,13 @@ from homeassistant.helpers import selector
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .const import (
+    ATTR_CAREGIVER_NAME,
+    ATTR_CAREGIVER_NOTIFY_SERVICE,
+    ATTR_CONFIRMATION_REQUIRED,
     ATTR_DATABASE_ENTRY_ID,
     ATTR_DOSAGE,
+    ATTR_FORM,
+    ATTR_INSTRUCTIONS,
     ATTR_MEDICATION_NAME,
     ATTR_MISSED_AFTER_MINUTES,
     ATTR_NFC_TAG_ID,
@@ -20,6 +25,7 @@ from .const import (
     ATTR_NOTIFICATION_ENABLED,
     ATTR_NOTIFY_SERVICE,
     ATTR_PROFILE_NAME,
+    ATTR_PURPOSE,
     ATTR_QUANTITY,
     ATTR_REFILL_AT,
     ATTR_REMINDER_MINUTES,
@@ -279,6 +285,9 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
                 quantity=self._coerce_optional_float(self._draft.get(ATTR_QUANTITY)),
                 refill_at=self._coerce_optional_float(self._draft.get(ATTR_REFILL_AT)),
                 notes=self._draft.get(ATTR_NOTES, ""),
+                instructions=self._draft.get(ATTR_INSTRUCTIONS, ""),
+                purpose=self._draft.get(ATTR_PURPOSE, ""),
+                form=self._draft.get(ATTR_FORM, ""),
                 database_entry_id=(
                     None
                     if self._selected_database_entry_id == CUSTOM_DATABASE_OPTION
@@ -287,6 +296,9 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
                 nfc_tag_id=self._empty_to_none(self._draft.get(ATTR_NFC_TAG_ID)),
                 notification_enabled=self._draft.get(ATTR_NOTIFICATION_ENABLED, True),
                 notify_service=self._empty_to_none(self._draft.get(ATTR_NOTIFY_SERVICE)),
+                caregiver_name=self._empty_to_none(self._draft.get(ATTR_CAREGIVER_NAME)),
+                caregiver_notify_service=self._empty_to_none(self._draft.get(ATTR_CAREGIVER_NOTIFY_SERVICE)),
+                confirmation_required=self._draft.get(ATTR_CONFIRMATION_REQUIRED, False),
                 reminder_minutes=int(self._draft.get(ATTR_REMINDER_MINUTES, DEFAULT_REMINDER_MINUTES)),
                 missed_after_minutes=int(
                     self._draft.get(ATTR_MISSED_AFTER_MINUTES, DEFAULT_MISSED_AFTER_MINUTES)
@@ -300,7 +312,11 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="add_medication_advanced",
-            data_schema=self._advanced_schema(),
+            data_schema=self._advanced_schema(
+                purpose=database_entry["purpose"] if database_entry else "",
+                form=database_entry["form"] if database_entry else "",
+                instructions=database_entry["instructions"] if database_entry else "",
+            ),
         )
 
     async def async_step_edit_medication_select(self, user_input=None):
@@ -323,6 +339,12 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
                 ATTR_REFILL_AT: "" if medication.refill_at is None else str(medication.refill_at),
                 ATTR_NFC_TAG_ID: medication.nfc_tag_id or "",
                 ATTR_NOTIFY_SERVICE: medication.notify_service or "",
+                ATTR_CAREGIVER_NAME: medication.caregiver_name or "",
+                ATTR_CAREGIVER_NOTIFY_SERVICE: medication.caregiver_notify_service or "",
+                ATTR_CONFIRMATION_REQUIRED: medication.confirmation_required,
+                ATTR_PURPOSE: medication.purpose,
+                ATTR_FORM: medication.form,
+                ATTR_INSTRUCTIONS: medication.instructions,
                 ATTR_NOTIFICATION_ENABLED: medication.notification_enabled,
                 ATTR_REMINDER_MINUTES: medication.reminder_minutes,
                 ATTR_MISSED_AFTER_MINUTES: medication.missed_after_minutes,
@@ -451,10 +473,16 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
                 quantity=self._coerce_optional_float(self._draft.get(ATTR_QUANTITY)),
                 refill_at=self._coerce_optional_float(self._draft.get(ATTR_REFILL_AT)),
                 notes=self._draft.get(ATTR_NOTES, ""),
+                instructions=self._draft.get(ATTR_INSTRUCTIONS, ""),
+                purpose=self._draft.get(ATTR_PURPOSE, ""),
+                form=self._draft.get(ATTR_FORM, ""),
                 database_entry_id=medication.database_entry_id,
                 nfc_tag_id=self._empty_to_none(self._draft.get(ATTR_NFC_TAG_ID)),
                 notification_enabled=self._draft.get(ATTR_NOTIFICATION_ENABLED, True),
                 notify_service=self._empty_to_none(self._draft.get(ATTR_NOTIFY_SERVICE)),
+                caregiver_name=self._empty_to_none(self._draft.get(ATTR_CAREGIVER_NAME)),
+                caregiver_notify_service=self._empty_to_none(self._draft.get(ATTR_CAREGIVER_NOTIFY_SERVICE)),
+                confirmation_required=self._draft.get(ATTR_CONFIRMATION_REQUIRED, False),
                 reminder_minutes=int(self._draft.get(ATTR_REMINDER_MINUTES, medication.reminder_minutes)),
                 missed_after_minutes=int(
                     self._draft.get(ATTR_MISSED_AFTER_MINUTES, medication.missed_after_minutes)
@@ -473,6 +501,12 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
                 refill_at=self._draft.get(ATTR_REFILL_AT, ""),
                 nfc_tag_id=self._draft.get(ATTR_NFC_TAG_ID, ""),
                 notify_service=self._draft.get(ATTR_NOTIFY_SERVICE, ""),
+                caregiver_name=self._draft.get(ATTR_CAREGIVER_NAME, ""),
+                caregiver_notify_service=self._draft.get(ATTR_CAREGIVER_NOTIFY_SERVICE, ""),
+                confirmation_required=self._draft.get(ATTR_CONFIRMATION_REQUIRED, False),
+                purpose=self._draft.get(ATTR_PURPOSE, ""),
+                form=self._draft.get(ATTR_FORM, ""),
+                instructions=self._draft.get(ATTR_INSTRUCTIONS, ""),
                 notification_enabled=self._draft.get(ATTR_NOTIFICATION_ENABLED, True),
                 reminder_minutes=self._draft.get(ATTR_REMINDER_MINUTES, DEFAULT_REMINDER_MINUTES),
                 missed_after_minutes=self._draft.get(
@@ -530,6 +564,12 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
         refill_at="",
         nfc_tag_id="",
         notify_service="",
+        caregiver_name="",
+        caregiver_notify_service="",
+        confirmation_required=False,
+        purpose="",
+        form="",
+        instructions="",
         notification_enabled=True,
         reminder_minutes=DEFAULT_REMINDER_MINUTES,
         missed_after_minutes=DEFAULT_MISSED_AFTER_MINUTES,
@@ -547,6 +587,20 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
                     selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
                 ),
                 vol.Optional(ATTR_NOTIFY_SERVICE, default=notify_service): self._notify_service_selector(),
+                vol.Optional(ATTR_CAREGIVER_NAME, default=caregiver_name): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+                ),
+                vol.Optional(ATTR_CAREGIVER_NOTIFY_SERVICE, default=caregiver_notify_service): self._notify_service_selector(),
+                vol.Required(ATTR_CONFIRMATION_REQUIRED, default=confirmation_required): selector.BooleanSelector(),
+                vol.Optional(ATTR_PURPOSE, default=purpose): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+                ),
+                vol.Optional(ATTR_FORM, default=form): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+                ),
+                vol.Optional(ATTR_INSTRUCTIONS, default=instructions): selector.TextSelector(
+                    selector.TextSelectorConfig(multiline=True, type=selector.TextSelectorType.TEXT)
+                ),
                 vol.Required(ATTR_NOTIFICATION_ENABLED, default=notification_enabled): selector.BooleanSelector(),
                 vol.Required(ATTR_REMINDER_MINUTES, default=reminder_minutes): selector.NumberSelector(
                     selector.NumberSelectorConfig(

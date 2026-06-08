@@ -244,12 +244,20 @@ class MedicationTrackerCard extends HTMLElement {
             </div>
             <div class="details">
               <div class="detail">
+                <div class="detail-label">Purpose</div>
+                <div class="detail-value">${row.purpose || "Not set"}</div>
+              </div>
+              <div class="detail">
                 <div class="detail-label">Next dose</div>
                 <div class="detail-value">${this._formatDate(row.next_dose, "Not scheduled")}</div>
               </div>
               <div class="detail">
                 <div class="detail-label">Last taken</div>
                 <div class="detail-value">${this._formatDate(row.last_taken, "Not logged")}</div>
+              </div>
+              <div class="detail">
+                <div class="detail-label">Caregiver</div>
+                <div class="detail-value">${row.caregiver_name || "Not assigned"}</div>
               </div>
               <div class="detail">
                 <div class="detail-label">Schedule</div>

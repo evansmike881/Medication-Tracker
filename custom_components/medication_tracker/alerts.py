@@ -13,6 +13,7 @@ from .const import (
     ATTR_NOTIFICATION_MESSAGE,
     ATTR_SCHEDULED_TIME,
     DOMAIN,
+    EVENT_CAREGIVER_CONFIRMATION,
     EVENT_DOSE_DUE,
     EVENT_DOSE_MISSED,
     EVENT_REFILL_NEEDED,
@@ -73,10 +74,12 @@ class MedicationAlertEngine:
             self.hass.bus.async_fire(EVENT_DOSE_MISSED, event_payload)
         elif alert["type"] == "refill":
             self.hass.bus.async_fire(EVENT_REFILL_NEEDED, event_payload)
+        elif alert["type"] == "caregiver_confirmation":
+            self.hass.bus.async_fire(EVENT_CAREGIVER_CONFIRMATION, event_payload)
 
     def dismiss_for_medication(self, medication_id: str) -> None:
         """Dismiss common due and missed notifications when a dose is logged."""
-        for prefix in ("due", "missed"):
+        for prefix in ("due", "missed", "caregiver_confirmation"):
             persistent_notification.async_dismiss(
                 self.hass,
                 f"{DOMAIN}_{prefix}_{medication_id}",

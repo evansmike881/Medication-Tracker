@@ -4,6 +4,30 @@ Medication Tracker is a Home Assistant integration built for one very real probl
 
 I wanted this to feel like a proper product inside Home Assistant, not just a handful of scripts. The goal is simple: make medication routines easier to trust, easier to check, and easier to act on for yourself, your family, or your pets.
 
+## Important disclaimer
+
+Medication Tracker is provided for convenience, organization, and informational use only.
+
+- It is not medical advice.
+- It is not a medical device.
+- It is not a substitute for professional medical guidance, prescription instructions, pharmacist advice, packaging directions, or clinical judgment.
+- You must not rely on this integration as the sole safeguard for taking, supervising, confirming, or managing any medication.
+
+By using this integration, the user, medication owner, caregiver, and household remain fully responsible for:
+
+- correct medication identification
+- dosing, timing, and administration
+- refill management
+- checking for missed, duplicated, delayed, or incorrect doses
+- verifying alerts, logs, confirmations, and dashboard information
+- following prescriber instructions and product labeling
+
+This project may contain bugs, configuration mistakes, delayed notifications, missed automations, inaccurate state, frontend issues, entity problems, or logging errors. Notifications may fail, entities may not update as expected, and recorded data may be incomplete or incorrect.
+
+Use of this integration is entirely at your own risk. The maintainers, contributors, and distributors of this project accept no responsibility for medication errors, missed doses, duplicate doses, adverse outcomes, data loss, notification failures, or any direct or indirect harm arising from use of the software.
+
+If a medication routine is safety-critical, use additional safeguards and always confirm decisions against professional medical advice and the official medication instructions.
+
 ## Why this exists
 
 Medication routines are one of those things that sound simple until life gets busy.
@@ -24,7 +48,9 @@ Medication Tracker is designed to answer those questions fast, inside the Home A
 - See next dose, last dose, missed doses, refill status, and compliance
 - Get due, missed-dose, and refill alerts
 - Use a built-in medication database to speed up setup
+- Store richer medication reference details like purpose, form, instructions, and common strengths
 - Manage everything from the Home Assistant backend instead of raw YAML
+- Support caregiver-aware routines where someone else is responsible for checking or confirming doses
 
 ## What it feels like in practice
 
@@ -45,12 +71,14 @@ That means less second-guessing, fewer missed steps, and a much better shared vi
 - Multiple people or pets via profile-based tracking
 - Backend-first medication management through the integration options UI
 - Bundled starter medication database for common medications
+- Richer medication metadata including purpose, form, instructions, and strength options
 - Daily scheduled doses with one or more times per day
 - Sensors for next dose, last dose, missed doses, days remaining, and compliance percentage
 - Binary sensors for `due now`, `needs refill`, and `has missed dose`
 - Per-medication `Log Dose` buttons
 - Due, missed-dose, and refill alerts
 - Optional actionable mobile notifications using a `notify` service
+- Optional caregiver name, caregiver notification target, and caregiver confirmation workflow
 - NFC tag confirmation through Home Assistant `tag_scanned` events
 - Assist intents for medication status and logging
 - Summary sensors and a medication registry for dashboards
@@ -79,6 +107,7 @@ The flow is designed to be friendly:
 - enter the basics first
 - choose schedule times with time pickers
 - optionally add advanced settings like reminders, refill thresholds, NFC tags, and mobile notifications
+- optionally assign a caregiver or responsible adult and require confirmation for supervised routines
 
 ## Dashboard and registry views
 
@@ -94,7 +123,14 @@ entity: sensor.medication_tracker_medication_registry
 title: Medication Registry
 ```
 
-If the card does not appear immediately after updating, refresh the browser or restart Home Assistant once.
+If the card does not appear immediately after updating, add it manually as a Lovelace resource:
+
+```yaml
+url: /medication_tracker_assets/medication-tracker-card.js
+type: module
+```
+
+Then refresh the browser and add the card again.
 
 ## Alerts and automations
 
@@ -106,6 +142,8 @@ The integration can create persistent notifications and also fire events you can
 - `medication_tracker_nfc_logged`
 
 If a medication has a `notify_service` configured, Medication Tracker can also send actionable mobile notifications with a `Taken` action button.
+
+If a medication has caregiver confirmation enabled, the integration can also raise caregiver confirmation alerts so household workflows are clearer when someone else is responsible for checking the dose.
 
 An example notification package lives at [examples/packages/medication_tracker_notifications.yaml](//192.168.4.229/html/!HA%20Integrations/Medication%20Tracker/examples/packages/medication_tracker_notifications.yaml).
 

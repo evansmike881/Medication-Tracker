@@ -17,6 +17,7 @@ BINARY_SENSOR_TYPES: tuple[BinarySensorEntityDescription, ...] = (
     BinarySensorEntityDescription(key="due_now", name="Due Now"),
     BinarySensorEntityDescription(key="needs_refill", name="Needs Refill"),
     BinarySensorEntityDescription(key="has_missed_dose", name="Has Missed Dose"),
+    BinarySensorEntityDescription(key="caregiver_confirmation_needed", name="Caregiver Confirmation Needed"),
 )
 
 

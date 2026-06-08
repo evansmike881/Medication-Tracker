@@ -45,16 +45,32 @@ class MedicationTrackerManager:
         quantity: float | None = None,
         refill_at: float | None = None,
         notes: str = "",
+        instructions: str = "",
+        purpose: str = "",
+        form: str = "",
+        strength_options: list[str] | None = None,
         database_entry_id: str | None = None,
         nfc_tag_id: str | None = None,
         notification_enabled: bool = True,
         notify_service: str | None = None,
+        caregiver_name: str | None = None,
+        caregiver_notify_service: str | None = None,
+        confirmation_required: bool = False,
         reminder_minutes: int = DEFAULT_REMINDER_MINUTES,
         missed_after_minutes: int = DEFAULT_MISSED_AFTER_MINUTES,
     ) -> Medication:
         """Create or update a medication."""
         normalized_schedules = self._normalize_schedules(schedules)
         existing = self.medications.get(medication_id)
+        database_entry = self.database.get(database_entry_id) if database_entry_id else None
+        computed_purpose = purpose or (database_entry.get("purpose", "") if database_entry else "")
+        computed_form = form or (database_entry.get("form", "") if database_entry else "")
+        computed_instructions = instructions or (database_entry.get("instructions", "") if database_entry else "")
+        computed_strength_options = (
+            list(strength_options)
+            if strength_options is not None
+            else list(database_entry.get("strength_options", [])) if database_entry else []
+        )
         medication = Medication(
             medication_id=medication_id,
             profile_id=profile_id,
@@ -65,15 +81,23 @@ class MedicationTrackerManager:
             quantity=float(quantity) if quantity is not None else None,
             refill_at=float(refill_at) if refill_at is not None else None,
             notes=notes,
+            instructions=computed_instructions,
+            purpose=computed_purpose,
+            form=computed_form,
+            strength_options=computed_strength_options,
             database_entry_id=database_entry_id,
             nfc_tag_id=nfc_tag_id or None,
             notification_enabled=notification_enabled,
             notify_service=notify_service or None,
+            caregiver_name=caregiver_name or (existing.caregiver_name if existing else None),
+            caregiver_notify_service=caregiver_notify_service or (existing.caregiver_notify_service if existing else None),
+            confirmation_required=confirmation_required,
             reminder_minutes=reminder_minutes,
             missed_after_minutes=missed_after_minutes,
             last_due_notification=existing.last_due_notification if existing else None,
             last_missed_notification=existing.last_missed_notification if existing else None,
             last_refill_notification=existing.last_refill_notification if existing else None,
+            last_caregiver_notification=existing.last_caregiver_notification if existing else None,
             start_date=existing.start_date if existing else date.today(),
             dose_logs=list(existing.dose_logs) if existing else [],
         )
@@ -85,13 +109,21 @@ class MedicationTrackerManager:
         self,
         medication_id: str,
         taken_at: datetime | None = None,
+        source: str = "manual",
+        confirmed_by: str | None = None,
     ) -> Medication:
         """Log a dose for a medication."""
         medication = self._get_medication(medication_id)
         timestamp = taken_at or dt_util.now()
         if dt_util.is_naive(timestamp):
             timestamp = dt_util.as_local(dt_util.as_utc(timestamp))
-        medication.dose_logs.append(DoseLog(taken_at=timestamp))
+        medication.dose_logs.append(
+            DoseLog(
+                taken_at=timestamp,
+                source=source,
+                confirmed_by=confirmed_by,
+            )
+        )
         medication.dose_logs.sort(key=lambda item: item.taken_at)
 
         if medication.quantity is not None:
@@ -99,6 +131,7 @@ class MedicationTrackerManager:
 
         medication.last_due_notification = None
         medication.last_missed_notification = None
+        medication.last_caregiver_notification = None
         await self._async_save()
         return medication
 
@@ -153,11 +186,18 @@ class MedicationTrackerManager:
             if scheduled.date() == today and scheduled <= now
         ]
         last_dose = medication.dose_logs[-1].taken_at if medication.dose_logs else None
+        last_confirmed_by = medication.dose_logs[-1].confirmed_by if medication.dose_logs else None
         next_dose = self._next_scheduled_dose(medication, now)
         missed_doses = self._missed_doses(medication, now, matched_occurrences)
         total_scheduled = len(schedule_occurrences)
         compliance = round((len(matched_occurrences) / total_scheduled) * 100, 1) if total_scheduled else 100.0
         days_remaining = self._days_remaining(medication)
+        caregiver_confirmation_needed = bool(
+            medication.confirmation_required
+            and medication.caregiver_name
+            and medication.dose_logs
+            and not medication.dose_logs[-1].confirmed_by
+        )
 
         return {
             "medication_id": medication.medication_id,
@@ -166,9 +206,14 @@ class MedicationTrackerManager:
             "medication_name": medication.name,
             "dosage": medication.dosage,
             "notes": medication.notes,
+            "instructions": medication.instructions,
+            "purpose": medication.purpose,
+            "form": medication.form,
+            "strength_options": medication.strength_options,
             "schedules": medication.schedules,
             "dose_count": len(medication.dose_logs),
             "last_taken": last_dose.isoformat() if last_dose else None,
+            "last_confirmed_by": last_confirmed_by,
             "next_dose": next_dose.isoformat() if next_dose else None,
             "missed_doses": missed_doses,
             "remaining_quantity": medication.quantity,
@@ -179,6 +224,10 @@ class MedicationTrackerManager:
             "taken_today": len(taken_today),
             "notification_enabled": medication.notification_enabled,
             "notify_service": medication.notify_service,
+            "caregiver_name": medication.caregiver_name,
+            "caregiver_notify_service": medication.caregiver_notify_service,
+            "confirmation_required": medication.confirmation_required,
+            "caregiver_confirmation_needed": caregiver_confirmation_needed,
             "nfc_tag_id": medication.nfc_tag_id,
             "database_entry_id": medication.database_entry_id,
             "reminder_minutes": medication.reminder_minutes,
@@ -193,14 +242,19 @@ class MedicationTrackerManager:
         next_due_candidates = [item["next_dose"] for item in snapshots if item["next_dose"]]
         medications = list(self.medications.values())
         profile_names = sorted({medication.profile_name for medication in medications})
+        caregiver_names = sorted({medication.caregiver_name for medication in medications if medication.caregiver_name})
         return {
             "medication_count": len(snapshots),
             "tracked_medications": ", ".join(medication.name for medication in medications) or "None",
             "tracked_profiles": ", ".join(profile_names) or "None",
+            "tracked_caregivers": ", ".join(caregiver_names) or "None",
             "medication_registry": len(medications),
             "due_now_count": sum(1 for item in snapshots if item["due_now"]),
             "missed_dose_count": sum(item["missed_doses"] for item in snapshots),
             "refill_needed_count": sum(1 for item in snapshots if item["needs_refill"]),
+            "caregiver_confirmation_count": sum(
+                1 for item in snapshots if item["caregiver_confirmation_needed"]
+            ),
             "next_due": min(next_due_candidates) if next_due_candidates else None,
         }
 
@@ -224,15 +278,21 @@ class MedicationTrackerManager:
                     "medication_name": medication.name,
                     "medication_id": medication.medication_id,
                     "dosage": medication.dosage,
+                    "purpose": snapshot["purpose"],
+                    "form": snapshot["form"],
+                    "instructions": snapshot["instructions"],
                     "schedules": medication.schedules,
                     "next_dose": snapshot["next_dose"],
                     "last_taken": snapshot["last_taken"],
+                    "last_confirmed_by": snapshot["last_confirmed_by"],
                     "status": status,
                     "missed_doses": snapshot["missed_doses"],
                     "days_remaining": snapshot["days_remaining"],
                     "remaining_quantity": snapshot["remaining_quantity"],
                     "due_now": snapshot["due_now"],
                     "needs_refill": snapshot["needs_refill"],
+                    "caregiver_name": snapshot["caregiver_name"],
+                    "caregiver_confirmation_needed": snapshot["caregiver_confirmation_needed"],
                     "compliance_percentage": snapshot["compliance_percentage"],
                     "button_entity_id": f"button.{entity_base}_log_dose",
                     "next_dose_entity_id": f"sensor.{entity_base}_next_dose",
@@ -297,6 +357,24 @@ class MedicationTrackerManager:
                             ),
                         }
                     )
+            if medication.confirmation_required and medication.caregiver_name and medication.dose_logs:
+                latest_log = medication.dose_logs[-1]
+                if (
+                    latest_log.confirmed_by is None
+                    and medication.last_caregiver_notification != latest_log.taken_at.isoformat()
+                ):
+                    alerts.append(
+                        {
+                            "type": "caregiver_confirmation",
+                            "medication_id": medication.medication_id,
+                            "notify_service": medication.caregiver_notify_service or medication.notify_service,
+                            "scheduled_time": latest_log.taken_at,
+                            "message": (
+                                f"{medication.caregiver_name} should confirm the latest logged dose of "
+                                f"{medication.name} for {medication.profile_name}."
+                            ),
+                        }
+                    )
         return alerts
 
     async def async_mark_alert_sent(
@@ -313,6 +391,8 @@ class MedicationTrackerManager:
             medication.last_missed_notification = scheduled_time.isoformat()
         elif alert_type == "refill":
             medication.last_refill_notification = date.today().isoformat()
+        elif alert_type == "caregiver_confirmation" and scheduled_time:
+            medication.last_caregiver_notification = scheduled_time.isoformat()
         await self._async_save()
 
     async def _async_save(self) -> None:

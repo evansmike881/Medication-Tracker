@@ -43,6 +43,18 @@ add_medication:
       required: false
       selector:
         text:
+    instructions:
+      required: false
+      selector:
+        text:
+    purpose:
+      required: false
+      selector:
+        text:
+    form:
+      required: false
+      selector:
+        text:
     database_entry_id:
       required: false
       selector:
@@ -60,6 +72,19 @@ add_medication:
       example: notify.mobile_app_pixel_9
       selector:
         text:
+    caregiver_name:
+      required: false
+      selector:
+        text:
+    caregiver_notify_service:
+      required: false
+      example: notify.mobile_app_family_phone
+      selector:
+        text:
+    confirmation_required:
+      required: false
+      selector:
+        boolean:
     reminder_minutes:
       required: false
       selector:
@@ -83,6 +108,14 @@ log_dose:
     taken_at:
       required: false
       example: "2026-06-08T08:05:00+01:00"
+      selector:
+        text:
+    source:
+      required: false
+      selector:
+        text:
+    confirmed_by:
+      required: false
       selector:
         text:
 remove_medication:

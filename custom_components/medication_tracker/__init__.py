@@ -19,18 +19,26 @@ from homeassistant.util import dt as dt_util
 
 from .alerts import MedicationAlertEngine
 from .const import (
+    ATTR_CAREGIVER_NAME,
+    ATTR_CAREGIVER_NOTIFY_SERVICE,
+    ATTR_CONFIRMATION_REQUIRED,
+    ATTR_CONFIRMED_BY,
     ATTR_MEDICATION_ID,
     ATTR_NOTIFICATION_ENABLED,
     ATTR_NOTIFY_SERVICE,
     ATTR_NFC_TAG_ID,
     ATTR_PROFILE_ID,
     ATTR_PROFILE_NAME,
+    ATTR_PURPOSE,
     ATTR_QUANTITY,
     ATTR_REFILL_AT,
     ATTR_REMINDER_MINUTES,
     ATTR_SCHEDULES,
+    ATTR_SOURCE,
     ATTR_TAKEN_AT,
     ATTR_DATABASE_ENTRY_ID,
+    ATTR_FORM,
+    ATTR_INSTRUCTIONS,
     ATTR_MISSED_AFTER_MINUTES,
     ATTR_DOSAGE,
     ATTR_MEDICATION_NAME,
@@ -65,10 +73,16 @@ ADD_MEDICATION_SCHEMA = vol.Schema(
         vol.Optional(ATTR_QUANTITY): vol.Coerce(float),
         vol.Optional(ATTR_REFILL_AT): vol.Coerce(float),
         vol.Optional(ATTR_NOTES, default=""): cv.string,
+        vol.Optional(ATTR_INSTRUCTIONS, default=""): cv.string,
+        vol.Optional(ATTR_PURPOSE, default=""): cv.string,
+        vol.Optional(ATTR_FORM, default=""): cv.string,
         vol.Optional(ATTR_DATABASE_ENTRY_ID): cv.string,
         vol.Optional(ATTR_NFC_TAG_ID): cv.string,
         vol.Optional(ATTR_NOTIFICATION_ENABLED, default=True): cv.boolean,
         vol.Optional(ATTR_NOTIFY_SERVICE): cv.string,
+        vol.Optional(ATTR_CAREGIVER_NAME): cv.string,
+        vol.Optional(ATTR_CAREGIVER_NOTIFY_SERVICE): cv.string,
+        vol.Optional(ATTR_CONFIRMATION_REQUIRED, default=False): cv.boolean,
         vol.Optional(ATTR_REMINDER_MINUTES, default=DEFAULT_REMINDER_MINUTES): vol.Coerce(int),
         vol.Optional(ATTR_MISSED_AFTER_MINUTES, default=DEFAULT_MISSED_AFTER_MINUTES): vol.Coerce(int),
     }
@@ -78,6 +92,8 @@ LOG_DOSE_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_MEDICATION_ID): cv.string,
         vol.Optional(ATTR_TAKEN_AT): cv.datetime,
+        vol.Optional(ATTR_SOURCE, default="manual"): cv.string,
+        vol.Optional(ATTR_CONFIRMED_BY): cv.string,
     }
 )
 
@@ -162,7 +178,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         taken_at = call.data.get(ATTR_TAKEN_AT)
         if taken_at and dt_util.is_naive(taken_at):
             taken_at = dt_util.as_local(dt_util.as_utc(taken_at))
-        await runtime_data["manager"].async_log_dose(call.data[ATTR_MEDICATION_ID], taken_at)
+        await runtime_data["manager"].async_log_dose(
+            call.data[ATTR_MEDICATION_ID],
+            taken_at,
+            source=call.data.get(ATTR_SOURCE, "manual"),
+            confirmed_by=call.data.get(ATTR_CONFIRMED_BY),
+        )
         runtime_data["alert_engine"].dismiss_for_medication(call.data[ATTR_MEDICATION_ID])
         await runtime_data["coordinator"].async_request_refresh()
 
@@ -236,7 +257,7 @@ async def _async_handle_tag_scanned(hass: HomeAssistant, event: Event) -> None:
     if medication is None:
         return
 
-    await runtime_data["manager"].async_log_dose(medication.medication_id)
+    await runtime_data["manager"].async_log_dose(medication.medication_id, source="nfc")
     runtime_data["alert_engine"].dismiss_for_medication(medication.medication_id)
     await runtime_data["coordinator"].async_request_refresh()
     hass.bus.async_fire(
@@ -259,6 +280,6 @@ async def _async_handle_notification_action(hass: HomeAssistant, event: Event) -
     if medication_id not in runtime_data["manager"].medications:
         return
 
-    await runtime_data["manager"].async_log_dose(medication_id)
+    await runtime_data["manager"].async_log_dose(medication_id, source="mobile_action")
     runtime_data["alert_engine"].dismiss_for_medication(medication_id)
     await runtime_data["coordinator"].async_request_refresh()

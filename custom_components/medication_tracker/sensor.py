@@ -21,10 +21,16 @@ from homeassistant.util import slugify
 
 from .const import (
     ATTR_DAYS_REMAINING,
+    ATTR_CAREGIVER_NAME,
+    ATTR_CAREGIVER_CONFIRMATION_NEEDED,
+    ATTR_CONFIRMATION_REQUIRED,
     ATTR_DOSE_COUNT,
     ATTR_DOSAGE,
     ATTR_ENTITY_BASE,
+    ATTR_FORM,
+    ATTR_INSTRUCTIONS,
     ATTR_LAST_TAKEN,
+    ATTR_LAST_CONFIRMED_BY,
     ATTR_MEDICATION_ID,
     ATTR_MEDICATION_NAME,
     ATTR_MISSED_DOSES,
@@ -32,9 +38,11 @@ from .const import (
     ATTR_NOTES,
     ATTR_PROFILE_ID,
     ATTR_PROFILE_NAME,
+    ATTR_PURPOSE,
     ATTR_REFILL_AT,
     ATTR_REMAINING_QUANTITY,
     ATTR_SCHEDULES,
+    ATTR_STRENGTH_OPTIONS,
     DOMAIN,
     SIGNAL_MEDICATIONS_UPDATED,
 )
@@ -81,6 +89,10 @@ SUMMARY_SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         name="Tracked Profiles",
     ),
     SensorEntityDescription(
+        key="tracked_caregivers",
+        name="Tracked Caregivers",
+    ),
+    SensorEntityDescription(
         key="medication_registry",
         name="Medication Registry",
     ),
@@ -95,6 +107,10 @@ SUMMARY_SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
     SensorEntityDescription(
         key="refill_needed_count",
         name="Refill Needed Count",
+    ),
+    SensorEntityDescription(
+        key="caregiver_confirmation_count",
+        name="Caregiver Confirmations",
     ),
     SensorEntityDescription(
         key="next_due",
@@ -209,10 +225,18 @@ class MedicationSensor(CoordinatorEntity, SensorEntity):
             ATTR_PROFILE_ID: snapshot[ATTR_PROFILE_ID],
             ATTR_PROFILE_NAME: snapshot[ATTR_PROFILE_NAME],
             ATTR_DOSAGE: snapshot[ATTR_DOSAGE],
+            ATTR_PURPOSE: snapshot[ATTR_PURPOSE],
+            ATTR_FORM: snapshot[ATTR_FORM],
+            ATTR_STRENGTH_OPTIONS: snapshot[ATTR_STRENGTH_OPTIONS],
+            ATTR_INSTRUCTIONS: snapshot[ATTR_INSTRUCTIONS],
             ATTR_SCHEDULES: snapshot[ATTR_SCHEDULES],
             ATTR_DOSE_COUNT: snapshot[ATTR_DOSE_COUNT],
             ATTR_REMAINING_QUANTITY: snapshot[ATTR_REMAINING_QUANTITY],
             ATTR_REFILL_AT: snapshot[ATTR_REFILL_AT],
+            ATTR_CAREGIVER_NAME: snapshot[ATTR_CAREGIVER_NAME],
+            ATTR_CONFIRMATION_REQUIRED: snapshot[ATTR_CONFIRMATION_REQUIRED],
+            ATTR_CAREGIVER_CONFIRMATION_NEEDED: snapshot[ATTR_CAREGIVER_CONFIRMATION_NEEDED],
+            ATTR_LAST_CONFIRMED_BY: snapshot[ATTR_LAST_CONFIRMED_BY],
             ATTR_NOTES: snapshot[ATTR_NOTES],
         }
 
@@ -269,7 +293,12 @@ class MedicationSummarySensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, object] | None:
         """Return overview attributes for the summary device."""
-        if self.entity_description.key not in {"tracked_medications", "tracked_profiles", "medication_registry"}:
+        if self.entity_description.key not in {
+            "tracked_medications",
+            "tracked_profiles",
+            "tracked_caregivers",
+            "medication_registry",
+        }:
             return None
 
         medications = list(self._manager.list_medications())
@@ -294,6 +323,16 @@ class MedicationSummarySensor(CoordinatorEntity, SensorEntity):
             return {
                 "rows": self._manager.get_registry_rows(),
                 "registry_count": len(medications),
+            }
+
+        if self.entity_description.key == "tracked_caregivers":
+            caregivers = sorted({medication.caregiver_name for medication in medications if medication.caregiver_name})
+            return {
+                "caregivers": caregivers,
+                "medication_count_by_caregiver": {
+                    caregiver: sum(1 for medication in medications if medication.caregiver_name == caregiver)
+                    for caregiver in caregivers
+                },
             }
 
         return {
