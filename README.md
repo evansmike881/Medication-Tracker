@@ -123,6 +123,23 @@ entity: sensor.medication_tracker_medication_registry
 title: Medication Registry
 ```
 
+The card now includes a visual editor in Lovelace so you can turn sections on or off without hand-editing YAML. You can also configure it manually if you prefer:
+
+```yaml
+type: custom:medication-tracker-card
+entity: sensor.medication_tracker_medication_registry
+title: Medication Registry
+show_summary: true
+show_status_chip: true
+show_profile_name: true
+show_dosage: true
+show_caregiver: false
+show_compliance: true
+show_actions: true
+compact_rows: false
+max_rows: 6
+```
+
 If the card does not appear immediately after updating, add it manually as a Lovelace resource:
 
 ```yaml
