@@ -40,29 +40,54 @@
       },
       "add_medication_profile_new": {
         "title": "Create Profile",
-        "description": "Profiles let you group medications by person or pet.",
+        "description": "Enter the name of the person or pet. Medication Tracker will create the technical ID for you automatically.",
         "data": {
-          "profile_id": "Profile ID",
-          "profile_name": "Display name"
+          "profile_name": "Person or pet name"
         },
         "data_description": {
-          "profile_id": "A short unique ID such as mike, mum, or bella_dog.",
-          "profile_name": "The friendly name shown in Home Assistant."
+          "profile_name": "Examples: Mike, Mum, Bella the dog. This is the friendly name shown in Home Assistant."
         }
       },
-      "add_medication": {
-        "title": "Add Medication",
-        "description": "Fill in the medication details below. Times should be entered as 24-hour values such as 08:00 or 08:00, 20:00.",
+      "add_medication_basic": {
+        "title": "Basic Details",
+        "description": "Start with the medication name, dose, and any notes you want to keep with it.",
         "data": {
-          "profile_id": "Profile ID",
-          "profile_name": "Display name",
-          "medication_id": "Medication ID",
           "medication_name": "Medication name",
           "dosage": "Dose or strength",
-          "schedules": "Schedule times",
+          "notes": "Notes"
+        },
+        "data_description": {
+          "medication_name": "The name you want to see on buttons, sensors, and notifications.",
+          "dosage": "Examples: 1 tablet, 20 mg, 2 puffs.",
+          "notes": "Optional notes such as take with food or morning only."
+        }
+      },
+      "add_medication_schedule": {
+        "title": "Schedule Times",
+        "description": "Pick up to six times for this medication. Only the first time is required.",
+        "data": {
+          "time_slot_1": "Time 1",
+          "time_slot_2": "Time 2",
+          "time_slot_3": "Time 3",
+          "time_slot_4": "Time 4",
+          "time_slot_5": "Time 5",
+          "time_slot_6": "Time 6"
+        },
+        "data_description": {
+          "time_slot_1": "Required. The first scheduled time for this medication.",
+          "time_slot_2": "Optional additional time.",
+          "time_slot_3": "Optional additional time.",
+          "time_slot_4": "Optional additional time.",
+          "time_slot_5": "Optional additional time.",
+          "time_slot_6": "Optional additional time."
+        }
+      },
+      "add_medication_advanced": {
+        "title": "Advanced Settings",
+        "description": "Optional settings for stock tracking, reminders, NFC logging, and refill warnings.",
+        "data": {
           "quantity": "Current quantity",
           "refill_at": "Refill warning threshold",
-          "notes": "Notes",
           "nfc_tag_id": "NFC tag ID",
           "notify_service": "Notification service",
           "notification_enabled": "Enable reminders",
@@ -70,15 +95,8 @@
           "missed_after_minutes": "Mark missed after"
         },
         "data_description": {
-          "profile_id": "A short unique ID for the person or pet.",
-          "profile_name": "The friendly name shown in Home Assistant.",
-          "medication_id": "A short unique ID such as vitamin_d or amoxicillin_pm.",
-          "medication_name": "The name you want to see on buttons, sensors, and notifications.",
-          "dosage": "Examples: 1 tablet, 20 mg, 2 puffs.",
-          "schedules": "Enter one or more times separated by commas, for example 08:00, 20:00.",
           "quantity": "Optional. How many doses or units you currently have left.",
           "refill_at": "Optional. Trigger refill warnings when quantity drops to this number or below.",
-          "notes": "Optional notes such as take with food or morning only.",
           "nfc_tag_id": "Optional. Scan this NFC tag to log the medication as taken.",
           "notify_service": "Optional. Choose a notify service to send actionable reminders to a phone.",
           "notification_enabled": "Turn scheduled reminders and missed-dose alerts on or off for this medication.",
@@ -90,19 +108,40 @@
         "title": "Choose Medication",
         "description": "Pick a medication to update."
       },
-      "edit_medication": {
-        "title": "Edit Medication",
-        "description": "Update the medication details, reminder behavior, or refill settings.",
+      "edit_medication_basic": {
+        "title": "Basic Details",
+        "description": "Update the name, dose, and notes for this medication.",
         "data": {
-          "profile_id": "Profile ID",
           "profile_name": "Display name",
-          "medication_id": "Medication ID",
           "medication_name": "Medication name",
           "dosage": "Dose or strength",
-          "schedules": "Schedule times",
+          "notes": "Notes"
+        },
+        "data_description": {
+          "profile_name": "The friendly name shown in Home Assistant.",
+          "medication_name": "The name shown in Home Assistant.",
+          "dosage": "Examples: 1 tablet, 20 mg, 2 puffs.",
+          "notes": "Optional notes such as take with food or morning only."
+        }
+      },
+      "edit_medication_schedule": {
+        "title": "Schedule Times",
+        "description": "Update the times for this medication. Only the first time is required.",
+        "data": {
+          "time_slot_1": "Time 1",
+          "time_slot_2": "Time 2",
+          "time_slot_3": "Time 3",
+          "time_slot_4": "Time 4",
+          "time_slot_5": "Time 5",
+          "time_slot_6": "Time 6"
+        }
+      },
+      "edit_medication_advanced": {
+        "title": "Advanced Settings",
+        "description": "Update stock tracking, reminders, NFC logging, and refill warnings.",
+        "data": {
           "quantity": "Current quantity",
           "refill_at": "Refill warning threshold",
-          "notes": "Notes",
           "nfc_tag_id": "NFC tag ID",
           "notify_service": "Notification service",
           "notification_enabled": "Enable reminders",
@@ -110,15 +149,8 @@
           "missed_after_minutes": "Mark missed after"
         },
         "data_description": {
-          "profile_id": "A short unique ID for the person or pet.",
-          "profile_name": "The friendly name shown in Home Assistant.",
-          "medication_id": "The unique medication ID used internally.",
-          "medication_name": "The name shown in Home Assistant.",
-          "dosage": "Examples: 1 tablet, 20 mg, 2 puffs.",
-          "schedules": "Enter one or more times separated by commas, for example 08:00, 20:00.",
           "quantity": "Optional. How many doses or units you currently have left.",
           "refill_at": "Optional. Trigger refill warnings when quantity drops to this number or below.",
-          "notes": "Optional notes such as take with food or morning only.",
           "nfc_tag_id": "Optional. Scan this NFC tag to log the medication as taken.",
           "notify_service": "Optional. Choose a notify service to send actionable reminders to a phone.",
           "notification_enabled": "Turn scheduled reminders and missed-dose alerts on or off for this medication.",
@@ -133,6 +165,9 @@
     },
     "abort": {
       "no_medications": "No medications are currently configured."
+    },
+    "error": {
+      "at_least_one_time": "Add at least one schedule time."
     }
   }
 }
