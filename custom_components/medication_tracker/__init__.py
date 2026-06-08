@@ -56,6 +56,7 @@ from .manager import MedicationTrackerManager
 
 LOGGER = logging.getLogger(__name__)
 CARD_PATH = "/medication_tracker_assets/medication-tracker-card.js"
+CARD_PATH_V2 = "/medication_tracker_assets/medication-tracker-cards-v2.js"
 
 SERVICE_ADD_MEDICATION = "add_medication"
 SERVICE_LOG_DOSE = "log_dose"
@@ -241,9 +242,12 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     asset_path = Path(__file__).parent / "frontend" / "medication-tracker-card.js"
     cache_buster = int(asset_path.stat().st_mtime)
     await hass.http.async_register_static_paths(
-        [StaticPathConfig(CARD_PATH, str(asset_path), cache_headers=False)]
+        [
+            StaticPathConfig(CARD_PATH, str(asset_path), cache_headers=False),
+            StaticPathConfig(CARD_PATH_V2, str(asset_path), cache_headers=False),
+        ]
     )
-    add_extra_js_url(hass, f"{CARD_PATH}?v={cache_buster}")
+    add_extra_js_url(hass, f"{CARD_PATH_V2}?v={cache_buster}")
     hass.data[DOMAIN]["frontend_registered"] = True
 
 

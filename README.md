@@ -159,7 +159,7 @@ expand_today: true
 If the card does not appear immediately after updating, add it manually as a Lovelace resource:
 
 ```yaml
-url: /medication_tracker_assets/medication-tracker-card.js
+url: /medication_tracker_assets/medication-tracker-cards-v2.js
 type: module
 ```
 
