@@ -62,6 +62,13 @@
           "notes": "Optional notes such as take with food or morning only."
         }
       },
+      "add_medication_schedule_count": {
+        "title": "How Often?",
+        "description": "Choose how many times per day this medication should be scheduled.",
+        "data": {
+          "time_slot_count": "Times per day"
+        }
+      },
       "add_medication_schedule": {
         "title": "Schedule Times",
         "description": "Pick up to six times for this medication. Only the first time is required.",
@@ -122,6 +129,13 @@
           "medication_name": "The name shown in Home Assistant.",
           "dosage": "Examples: 1 tablet, 20 mg, 2 puffs.",
           "notes": "Optional notes such as take with food or morning only."
+        }
+      },
+      "edit_medication_schedule_count": {
+        "title": "How Often?",
+        "description": "Choose how many schedule times you want to edit.",
+        "data": {
+          "time_slot_count": "Times per day"
         }
       },
       "edit_medication_schedule": {

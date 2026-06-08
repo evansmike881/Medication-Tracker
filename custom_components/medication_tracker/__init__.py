@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
 
+from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import Event, HomeAssistant, ServiceCall
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers import config_validation as cv
@@ -44,6 +47,7 @@ from .intent import async_register_intents
 from .manager import MedicationTrackerManager
 
 LOGGER = logging.getLogger(__name__)
+CARD_URL = "/medication_tracker_assets/medication-tracker-card.js"
 
 SERVICE_ADD_MEDICATION = "add_medication"
 SERVICE_LOG_DOSE = "log_dose"
@@ -95,6 +99,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Medication Tracker from a config entry."""
+    await _async_register_frontend(hass)
     manager = MedicationTrackerManager(hass)
     await manager.async_initialize()
 
@@ -205,6 +210,19 @@ def _get_runtime_data(hass: HomeAssistant) -> dict[str, Any]:
     """Return the single runtime payload."""
     entry_ids = [key for key in hass.data[DOMAIN] if key != "logger"]
     return hass.data[DOMAIN][entry_ids[0]]
+
+
+async def _async_register_frontend(hass: HomeAssistant) -> None:
+    """Register the custom Lovelace card asset once."""
+    if hass.data[DOMAIN].get("frontend_registered"):
+        return
+
+    asset_path = Path(__file__).parent / "frontend" / "medication-tracker-card.js"
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(CARD_URL, str(asset_path), cache_headers=False)]
+    )
+    add_extra_js_url(hass, CARD_URL)
+    hass.data[DOMAIN]["frontend_registered"] = True
 
 
 async def _async_handle_tag_scanned(hass: HomeAssistant, event: Event) -> None:

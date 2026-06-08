@@ -1,0 +1,66 @@
+title: Medication Registry
+views:
+  - title: Registry
+    path: medication-registry
+    cards:
+      - type: heading
+        heading: Medication Registry
+      - type: grid
+        columns: 4
+        square: false
+        cards:
+          - type: tile
+            entity: sensor.medication_tracker_medication_count
+            name: Medications
+          - type: tile
+            entity: sensor.medication_tracker_due_now_count
+            name: Due now
+          - type: tile
+            entity: sensor.medication_tracker_missed_dose_count
+            name: Missed doses
+          - type: tile
+            entity: sensor.medication_tracker_refill_needed_count
+            name: Refill alerts
+      - type: markdown
+        title: Registry Table
+        content: >-
+          {% set rows = state_attr('sensor.medication_tracker_medication_registry', 'rows') or [] %}
+          | Profile | Medication | Status | Next dose | Last taken | Quick action |
+          |---|---|---|---|---|---|
+          {% for row in rows %}
+          | {{ row.profile_name }} | {{ row.medication_name }} {{ row.dosage and '(' ~ row.dosage ~ ')' or '' }} | {{ row.status }} | {{ as_local(as_datetime(row.next_dose)).strftime('%d %b %H:%M') if row.next_dose else 'Not scheduled' }} | {{ as_local(as_datetime(row.last_taken)).strftime('%d %b %H:%M') if row.last_taken else 'Not logged' }} | `{{ row.button_entity_id }}` |
+          {% endfor %}
+      - type: entities
+        title: Registry Source
+        entities:
+          - entity: sensor.medication_tracker_medication_registry
+            name: Medication registry data
+          - entity: sensor.medication_tracker_tracked_medications
+            name: Tracked medications
+          - entity: sensor.medication_tracker_tracked_profiles
+            name: Tracked profiles
+      - type: markdown
+        title: Quick Actions
+        content: >-
+          {% set rows = state_attr('sensor.medication_tracker_medication_registry', 'rows') or [] %}
+          {% if not rows %}
+          No medications are currently tracked.
+          {% else %}
+          Use the entity IDs below in tile/button cards for one-tap dose logging:
+
+          {% for row in rows %}
+          - **{{ row.medication_name }}**: `{{ row.button_entity_id }}`
+            Next dose sensor: `{{ row.next_dose_entity_id }}`
+            Due-now sensor: `{{ row.due_now_entity_id }}`
+          {% endfor %}
+          {% endif %}
+      - type: markdown
+        title: Recommended Tiles
+        content: |
+          Add individual tile cards for the button entities listed above if you want one-tap logging from the dashboard.
+          Good companion entities per medication:
+          - `button.<medication>_log_dose`
+          - `sensor.<medication>_next_dose`
+          - `sensor.<medication>_last_dose`
+          - `binary_sensor.<medication>_due_now`
+          - `binary_sensor.<medication>_needs_refill`

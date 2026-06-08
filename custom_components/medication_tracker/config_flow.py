@@ -32,6 +32,7 @@ from .const import (
 CONF_DISPLAY_NAME = "name"
 CUSTOM_DATABASE_OPTION = "__custom__"
 PROFILE_CHOICE = "profile_choice"
+TIME_SLOT_COUNT = "time_slot_count"
 TIME_SLOT_KEYS = (
     "time_slot_1",
     "time_slot_2",
@@ -78,6 +79,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
         self._selected_medication_id = None
         self._selected_profile_id = None
         self._selected_profile_name = None
+        self._selected_time_slot_count = 1
         self._draft: dict = {}
 
     @property
@@ -194,7 +196,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
 
         if user_input is not None:
             self._draft.update(user_input)
-            return await self.async_step_add_medication_schedule()
+            return await self.async_step_add_medication_schedule_count()
 
         return self.async_show_form(
             step_id="add_medication_basic",
@@ -237,7 +239,30 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="add_medication_schedule",
-            data_schema=self._time_schema(),
+            data_schema=self._time_schema(count=self._selected_time_slot_count),
+        )
+
+    async def async_step_add_medication_schedule_count(self, user_input=None):
+        """Choose how many times per day should be shown."""
+        if user_input is not None:
+            self._selected_time_slot_count = int(user_input[TIME_SLOT_COUNT])
+            return await self.async_step_add_medication_schedule()
+
+        return self.async_show_form(
+            step_id="add_medication_schedule_count",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(TIME_SLOT_COUNT, default=1): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                selector.SelectOptionDict(value=str(index), label=f"{index} time{'s' if index > 1 else ''} per day")
+                                for index in range(1, len(TIME_SLOT_KEYS) + 1)
+                            ],
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
+            ),
         )
 
     async def async_step_add_medication_advanced(self, user_input=None):
@@ -269,6 +294,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
             )
             await self._runtime["coordinator"].async_request_refresh()
             async_dispatcher_send(self.hass, SIGNAL_MEDICATIONS_UPDATED)
+            await self.hass.config_entries.async_reload(self._config_entry.entry_id)
             self._reset_draft()
             return self.async_create_entry(title="", data={})
 
@@ -328,7 +354,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
         """Edit basic medication details."""
         if user_input is not None:
             self._draft.update(user_input)
-            return await self.async_step_edit_medication_schedule()
+            return await self.async_step_edit_medication_schedule_count()
 
         return self.async_show_form(
             step_id="edit_medication_basic",
@@ -369,7 +395,10 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
             if not schedule_values:
                 return self.async_show_form(
                     step_id="edit_medication_schedule",
-                    data_schema=self._time_schema(self._draft.get("schedules", [])),
+                    data_schema=self._time_schema(
+                        schedules=self._draft.get("schedules", []),
+                        count=self._selected_time_slot_count,
+                    ),
                     errors={"base": "at_least_one_time"},
                 )
             self._draft["schedules"] = schedule_values
@@ -377,7 +406,34 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="edit_medication_schedule",
-            data_schema=self._time_schema(self._draft.get("schedules", [])),
+            data_schema=self._time_schema(
+                schedules=self._draft.get("schedules", []),
+                count=self._selected_time_slot_count,
+            ),
+        )
+
+    async def async_step_edit_medication_schedule_count(self, user_input=None):
+        """Choose how many schedule time fields to show while editing."""
+        if user_input is not None:
+            self._selected_time_slot_count = int(user_input[TIME_SLOT_COUNT])
+            return await self.async_step_edit_medication_schedule()
+
+        current_count = max(len(self._draft.get("schedules", [])), 1)
+        return self.async_show_form(
+            step_id="edit_medication_schedule_count",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(TIME_SLOT_COUNT, default=str(current_count)): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                selector.SelectOptionDict(value=str(index), label=f"{index} time{'s' if index > 1 else ''} per day")
+                                for index in range(1, len(TIME_SLOT_KEYS) + 1)
+                            ],
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
+            ),
         )
 
     async def async_step_edit_medication_advanced(self, user_input=None):
@@ -406,6 +462,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
             )
             await self._runtime["coordinator"].async_request_refresh()
             async_dispatcher_send(self.hass, SIGNAL_MEDICATIONS_UPDATED)
+            await self.hass.config_entries.async_reload(self._config_entry.entry_id)
             self._reset_draft()
             return self.async_create_entry(title="", data={})
 
@@ -434,6 +491,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
             await self._manager.async_remove_medication(user_input["selected_medication"])
             await self._runtime["coordinator"].async_request_refresh()
             async_dispatcher_send(self.hass, SIGNAL_MEDICATIONS_UPDATED)
+            await self.hass.config_entries.async_reload(self._config_entry.entry_id)
             self._reset_draft()
             return self.async_create_entry(title="", data={})
 
@@ -509,18 +567,18 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
             }
         )
 
-    def _time_schema(self, schedules=None):
+    def _time_schema(self, schedules=None, count=1):
         """Build the schedule form with multiple time pickers."""
         schedules = schedules or []
         schedule_defaults = []
         for item in schedules:
             parsed = time.fromisoformat(item)
             schedule_defaults.append(parsed)
-        while len(schedule_defaults) < len(TIME_SLOT_KEYS):
+        while len(schedule_defaults) < count:
             schedule_defaults.append(None)
 
         schema: dict = {}
-        for index, key in enumerate(TIME_SLOT_KEYS):
+        for index, key in enumerate(TIME_SLOT_KEYS[:count]):
             validator = vol.Required if index == 0 else vol.Optional
             schema[validator(key, default=schedule_defaults[index])] = selector.TimeSelector()
         return vol.Schema(schema)
@@ -598,4 +656,5 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
         self._selected_medication_id = None
         self._selected_profile_id = None
         self._selected_profile_name = None
+        self._selected_time_slot_count = 1
         self._draft = {}

@@ -10,6 +10,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
+from homeassistant.util import slugify
 
 from .const import DEFAULT_MISSED_AFTER_MINUTES, DEFAULT_REMINDER_MINUTES
 from .medication_database import MedicationDatabase
@@ -190,13 +191,58 @@ class MedicationTrackerManager:
         """Return aggregate dashboard values."""
         snapshots = [self.get_snapshot(medication.medication_id) for medication in self.medications.values()]
         next_due_candidates = [item["next_dose"] for item in snapshots if item["next_dose"]]
+        medications = list(self.medications.values())
+        profile_names = sorted({medication.profile_name for medication in medications})
         return {
             "medication_count": len(snapshots),
+            "tracked_medications": ", ".join(medication.name for medication in medications) or "None",
+            "tracked_profiles": ", ".join(profile_names) or "None",
+            "medication_registry": len(medications),
             "due_now_count": sum(1 for item in snapshots if item["due_now"]),
             "missed_dose_count": sum(item["missed_doses"] for item in snapshots),
             "refill_needed_count": sum(1 for item in snapshots if item["needs_refill"]),
             "next_due": min(next_due_candidates) if next_due_candidates else None,
         }
+
+    def get_registry_rows(self) -> list[dict[str, Any]]:
+        """Return medication rows for dashboard registry views."""
+        rows: list[dict[str, Any]] = []
+        for medication in sorted(self.medications.values(), key=lambda item: (item.profile_name.lower(), item.name.lower())):
+            snapshot = self.get_snapshot(medication.medication_id)
+            entity_base = slugify(medication.name)
+            status = "On Track"
+            if snapshot["missed_doses"] > 0:
+                status = "Missed Dose"
+            elif snapshot["due_now"]:
+                status = "Due Now"
+            elif snapshot["needs_refill"]:
+                status = "Needs Refill"
+
+            rows.append(
+                {
+                    "profile_name": medication.profile_name,
+                    "medication_name": medication.name,
+                    "medication_id": medication.medication_id,
+                    "dosage": medication.dosage,
+                    "schedules": medication.schedules,
+                    "next_dose": snapshot["next_dose"],
+                    "last_taken": snapshot["last_taken"],
+                    "status": status,
+                    "missed_doses": snapshot["missed_doses"],
+                    "days_remaining": snapshot["days_remaining"],
+                    "remaining_quantity": snapshot["remaining_quantity"],
+                    "due_now": snapshot["due_now"],
+                    "needs_refill": snapshot["needs_refill"],
+                    "compliance_percentage": snapshot["compliance_percentage"],
+                    "button_entity_id": f"button.{entity_base}_log_dose",
+                    "next_dose_entity_id": f"sensor.{entity_base}_next_dose",
+                    "last_dose_entity_id": f"sensor.{entity_base}_last_dose",
+                    "due_now_entity_id": f"binary_sensor.{entity_base}_due_now",
+                    "needs_refill_entity_id": f"binary_sensor.{entity_base}_needs_refill",
+                }
+            )
+
+        return rows
 
     def get_pending_alerts(self) -> list[dict[str, Any]]:
         """Return due, missed, and refill alerts that still need notifying."""

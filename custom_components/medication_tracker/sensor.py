@@ -73,6 +73,18 @@ SUMMARY_SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         name="Medication Count",
     ),
     SensorEntityDescription(
+        key="tracked_medications",
+        name="Tracked Medications",
+    ),
+    SensorEntityDescription(
+        key="tracked_profiles",
+        name="Tracked Profiles",
+    ),
+    SensorEntityDescription(
+        key="medication_registry",
+        name="Medication Registry",
+    ),
+    SensorEntityDescription(
         key="due_now_count",
         name="Due Now Count",
     ),
@@ -253,3 +265,41 @@ class MedicationSummarySensor(CoordinatorEntity, SensorEntity):
         if self.entity_description.device_class is SensorDeviceClass.TIMESTAMP and value:
             return datetime.fromisoformat(value)
         return value
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object] | None:
+        """Return overview attributes for the summary device."""
+        if self.entity_description.key not in {"tracked_medications", "tracked_profiles", "medication_registry"}:
+            return None
+
+        medications = list(self._manager.list_medications())
+        medication_rows = [
+            {
+                "profile": medication.profile_name,
+                "medication": medication.name,
+                "medication_id": medication.medication_id,
+                "schedules": medication.schedules,
+            }
+            for medication in medications
+        ]
+        profiles = sorted({medication.profile_name for medication in medications})
+
+        if self.entity_description.key == "tracked_medications":
+            return {
+                "medications": medication_rows,
+                "medication_names": [row["medication"] for row in medication_rows],
+            }
+
+        if self.entity_description.key == "medication_registry":
+            return {
+                "rows": self._manager.get_registry_rows(),
+                "registry_count": len(medications),
+            }
+
+        return {
+            "profiles": profiles,
+            "medication_count_by_profile": {
+                profile: sum(1 for medication in medications if medication.profile_name == profile)
+                for profile in profiles
+            },
+        }
