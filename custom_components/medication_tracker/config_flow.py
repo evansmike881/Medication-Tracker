@@ -6,6 +6,7 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers import selector
 
 from .const import (
     ATTR_DATABASE_ENTRY_ID,
@@ -72,6 +73,8 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
         self._config_entry = config_entry
         self._selected_database_entry_id = CUSTOM_DATABASE_OPTION
         self._selected_medication_id = None
+        self._selected_profile_id = None
+        self._selected_profile_name = None
 
     @property
     def _runtime(self):
@@ -98,7 +101,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
         """Pick a bundled medication template or a custom entry."""
         if user_input is not None:
             self._selected_database_entry_id = user_input[ATTR_DATABASE_ENTRY_ID]
-            return await self.async_step_add_medication()
+            return await self.async_step_add_medication_pick_profile()
 
         options = {CUSTOM_DATABASE_OPTION: "Custom medication"}
         for entry in self._manager.list_database_entries():
@@ -111,7 +114,74 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
                     vol.Required(
                         ATTR_DATABASE_ENTRY_ID,
                         default=CUSTOM_DATABASE_OPTION,
-                    ): vol.In(options),
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                selector.SelectOptionDict(value=value, label=label)
+                                for value, label in options.items()
+                            ],
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
+                }
+            ),
+        )
+
+    async def async_step_add_medication_pick_profile(self, user_input=None):
+        """Choose an existing profile or create a new one."""
+        profiles = self._profiles()
+        if not profiles:
+            return await self.async_step_add_medication_profile_new()
+
+        if user_input is not None:
+            profile_choice = user_input["profile_choice"]
+            if profile_choice == "__new__":
+                return await self.async_step_add_medication_profile_new()
+
+            self._selected_profile_id, self._selected_profile_name = profile_choice.split("|", 1)
+            return await self.async_step_add_medication()
+
+        options = [
+            selector.SelectOptionDict(value="__new__", label="Create a new person or pet")
+        ]
+        options.extend(
+            selector.SelectOptionDict(
+                value=f"{profile_id}|{profile_name}",
+                label=f"{profile_name} ({profile_id})",
+            )
+            for profile_id, profile_name in profiles.items()
+        )
+        return self.async_show_form(
+            step_id="add_medication_pick_profile",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("profile_choice", default="__new__"): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=options,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
+                }
+            ),
+        )
+
+    async def async_step_add_medication_profile_new(self, user_input=None):
+        """Create a new profile before adding medication."""
+        if user_input is not None:
+            self._selected_profile_id = user_input[ATTR_PROFILE_ID]
+            self._selected_profile_name = user_input[ATTR_PROFILE_NAME]
+            return await self.async_step_add_medication()
+
+        return self.async_show_form(
+            step_id="add_medication_profile_new",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(ATTR_PROFILE_ID): selector.TextSelector(
+                        selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+                    ),
+                    vol.Required(ATTR_PROFILE_NAME): selector.TextSelector(
+                        selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+                    ),
                 }
             ),
         )
@@ -124,8 +194,8 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
 
         if user_input is not None:
             await self._manager.async_add_medication(
-                profile_id=user_input[ATTR_PROFILE_ID],
-                profile_name=user_input[ATTR_PROFILE_NAME],
+                profile_id=self._selected_profile_id or user_input[ATTR_PROFILE_ID],
+                profile_name=self._selected_profile_name or user_input[ATTR_PROFILE_NAME],
                 medication_id=user_input[ATTR_MEDICATION_ID],
                 medication_name=user_input[ATTR_MEDICATION_NAME],
                 dosage=user_input[ATTR_DOSAGE],
@@ -157,23 +227,20 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="add_medication",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(ATTR_PROFILE_ID): str,
-                    vol.Required(ATTR_PROFILE_NAME): str,
-                    vol.Required(ATTR_MEDICATION_ID, default=default_id): str,
-                    vol.Required(ATTR_MEDICATION_NAME, default=default_name): str,
-                    vol.Required(ATTR_DOSAGE, default=default_dosage): str,
-                    vol.Required(ATTR_SCHEDULES, default="08:00"): str,
-                    vol.Optional(ATTR_QUANTITY, default=""): str,
-                    vol.Optional(ATTR_REFILL_AT, default=""): str,
-                    vol.Optional(ATTR_NOTES, default=default_notes): str,
-                    vol.Optional(ATTR_NFC_TAG_ID, default=""): str,
-                    vol.Optional(ATTR_NOTIFY_SERVICE, default=""): str,
-                    vol.Required(ATTR_NOTIFICATION_ENABLED, default=True): bool,
-                    vol.Required(ATTR_REMINDER_MINUTES, default=DEFAULT_REMINDER_MINUTES): int,
-                    vol.Required(ATTR_MISSED_AFTER_MINUTES, default=DEFAULT_MISSED_AFTER_MINUTES): int,
-                }
+            data_schema=self._build_medication_schema(
+                profile_locked=self._selected_profile_id is not None,
+                medication_id=default_id,
+                medication_name=default_name,
+                dosage=default_dosage,
+                schedules="08:00",
+                quantity="",
+                refill_at="",
+                notes=default_notes,
+                nfc_tag_id="",
+                notify_service="",
+                notification_enabled=True,
+                reminder_minutes=DEFAULT_REMINDER_MINUTES,
+                missed_after_minutes=DEFAULT_MISSED_AFTER_MINUTES,
             ),
         )
 
@@ -226,34 +293,21 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="edit_medication",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(ATTR_PROFILE_ID, default=medication.profile_id): str,
-                    vol.Required(ATTR_PROFILE_NAME, default=medication.profile_name): str,
-                    vol.Required(ATTR_MEDICATION_NAME, default=medication.name): str,
-                    vol.Required(ATTR_DOSAGE, default=medication.dosage): str,
-                    vol.Required(ATTR_SCHEDULES, default=", ".join(medication.schedules)): str,
-                    vol.Optional(
-                        ATTR_QUANTITY,
-                        default="" if medication.quantity is None else str(medication.quantity),
-                    ): str,
-                    vol.Optional(
-                        ATTR_REFILL_AT,
-                        default="" if medication.refill_at is None else str(medication.refill_at),
-                    ): str,
-                    vol.Optional(ATTR_NOTES, default=medication.notes): str,
-                    vol.Optional(ATTR_NFC_TAG_ID, default=medication.nfc_tag_id or ""): str,
-                    vol.Optional(ATTR_NOTIFY_SERVICE, default=medication.notify_service or ""): str,
-                    vol.Required(
-                        ATTR_NOTIFICATION_ENABLED,
-                        default=medication.notification_enabled,
-                    ): bool,
-                    vol.Required(ATTR_REMINDER_MINUTES, default=medication.reminder_minutes): int,
-                    vol.Required(
-                        ATTR_MISSED_AFTER_MINUTES,
-                        default=medication.missed_after_minutes,
-                    ): int,
-                }
+            data_schema=self._build_medication_schema(
+                profile_locked=False,
+                profile_id=medication.profile_id,
+                profile_name=medication.profile_name,
+                medication_name=medication.name,
+                dosage=medication.dosage,
+                schedules=", ".join(medication.schedules),
+                quantity="" if medication.quantity is None else str(medication.quantity),
+                refill_at="" if medication.refill_at is None else str(medication.refill_at),
+                notes=medication.notes,
+                nfc_tag_id=medication.nfc_tag_id or "",
+                notify_service=medication.notify_service or "",
+                notification_enabled=medication.notification_enabled,
+                reminder_minutes=medication.reminder_minutes,
+                missed_after_minutes=medication.missed_after_minutes,
             ),
         )
 
@@ -297,3 +351,97 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
     def _slugify(self, value):
         """Create a simple slug without extra HA helpers."""
         return "_".join("".join(ch.lower() if ch.isalnum() else " " for ch in value).split())
+
+    def _profiles(self):
+        """Return known profiles keyed by profile_id."""
+        profiles = {}
+        for medication in self._manager.list_medications():
+            profiles[medication.profile_id] = medication.profile_name
+        return dict(sorted(profiles.items(), key=lambda item: item[1].lower()))
+
+    def _notify_service_selector(self, default_value=""):
+        """Return a selector for available notify services."""
+        options = [selector.SelectOptionDict(value="", label="No mobile notification service")]
+        for service_name in sorted(self.hass.services.async_services().get("notify", {})):
+            if service_name == "notify":
+                continue
+            options.append(
+                selector.SelectOptionDict(
+                    value=f"notify.{service_name}",
+                    label=f"notify.{service_name}",
+                )
+            )
+        return selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=options,
+                mode=selector.SelectSelectorMode.DROPDOWN,
+                custom_value=True,
+            )
+        )
+
+    def _build_medication_schema(
+        self,
+        *,
+        profile_locked,
+        medication_name,
+        dosage,
+        schedules,
+        quantity,
+        refill_at,
+        notes,
+        nfc_tag_id,
+        notify_service,
+        notification_enabled,
+        reminder_minutes,
+        missed_after_minutes,
+        profile_id="",
+        profile_name="",
+        medication_id="",
+    ):
+        """Build a user-friendly medication form."""
+        schema = {}
+        if not profile_locked:
+            schema[vol.Required(ATTR_PROFILE_ID, default=profile_id)] = selector.TextSelector(
+                selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+            )
+            schema[vol.Required(ATTR_PROFILE_NAME, default=profile_name)] = selector.TextSelector(
+                selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+            )
+
+        schema[vol.Required(ATTR_MEDICATION_ID, default=medication_id)] = selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+        )
+        schema[vol.Required(ATTR_MEDICATION_NAME, default=medication_name)] = selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+        )
+        schema[vol.Required(ATTR_DOSAGE, default=dosage)] = selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+        )
+        schema[vol.Required(ATTR_SCHEDULES, default=schedules)] = selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+        )
+        schema[vol.Optional(ATTR_QUANTITY, default=quantity)] = selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.NUMBER)
+        )
+        schema[vol.Optional(ATTR_REFILL_AT, default=refill_at)] = selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.NUMBER)
+        )
+        schema[vol.Optional(ATTR_NOTES, default=notes)] = selector.TextSelector(
+            selector.TextSelectorConfig(multiline=True, type=selector.TextSelectorType.TEXT)
+        )
+        schema[vol.Optional(ATTR_NFC_TAG_ID, default=nfc_tag_id)] = selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+        )
+        schema[vol.Optional(ATTR_NOTIFY_SERVICE, default=notify_service)] = self._notify_service_selector(
+            notify_service
+        )
+        schema[vol.Required(ATTR_NOTIFICATION_ENABLED, default=notification_enabled)] = selector.BooleanSelector()
+        schema[vol.Required(ATTR_REMINDER_MINUTES, default=reminder_minutes)] = selector.NumberSelector(
+            selector.NumberSelectorConfig(min=1, max=240, step=1, mode=selector.NumberSelectorMode.BOX)
+        )
+        schema[
+            vol.Required(ATTR_MISSED_AFTER_MINUTES, default=missed_after_minutes)
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(min=1, max=1440, step=1, mode=selector.NumberSelectorMode.BOX)
+        )
+        return vol.Schema(schema)

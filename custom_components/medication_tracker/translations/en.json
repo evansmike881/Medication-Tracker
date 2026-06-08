@@ -17,6 +17,7 @@
     "step": {
       "init": {
         "title": "Medication Tracker",
+        "description": "Add and manage medications, people or pets, reminders, and refill settings.",
         "menu_options": {
           "add_medication_pick_database": "Add medication",
           "edit_medication_select": "Edit medication",
@@ -25,19 +26,109 @@
       },
       "add_medication_pick_database": {
         "title": "Medication Catalog",
-        "description": "Choose a bundled medication template or continue with a custom medication."
+        "description": "Choose a bundled medication template to pre-fill common details, or choose a custom medication if it is not listed.",
+        "data": {
+          "database_entry_id": "Medication template"
+        }
+      },
+      "add_medication_pick_profile": {
+        "title": "Who Is This For?",
+        "description": "Select an existing person or pet, or create a new profile first.",
+        "data": {
+          "profile_choice": "Person or pet"
+        }
+      },
+      "add_medication_profile_new": {
+        "title": "Create Profile",
+        "description": "Profiles let you group medications by person or pet.",
+        "data": {
+          "profile_id": "Profile ID",
+          "profile_name": "Display name"
+        },
+        "data_description": {
+          "profile_id": "A short unique ID such as mike, mum, or bella_dog.",
+          "profile_name": "The friendly name shown in Home Assistant."
+        }
       },
       "add_medication": {
-        "title": "Add Medication"
+        "title": "Add Medication",
+        "description": "Fill in the medication details below. Times should be entered as 24-hour values such as 08:00 or 08:00, 20:00.",
+        "data": {
+          "profile_id": "Profile ID",
+          "profile_name": "Display name",
+          "medication_id": "Medication ID",
+          "medication_name": "Medication name",
+          "dosage": "Dose or strength",
+          "schedules": "Schedule times",
+          "quantity": "Current quantity",
+          "refill_at": "Refill warning threshold",
+          "notes": "Notes",
+          "nfc_tag_id": "NFC tag ID",
+          "notify_service": "Notification service",
+          "notification_enabled": "Enable reminders",
+          "reminder_minutes": "Due reminder window",
+          "missed_after_minutes": "Mark missed after"
+        },
+        "data_description": {
+          "profile_id": "A short unique ID for the person or pet.",
+          "profile_name": "The friendly name shown in Home Assistant.",
+          "medication_id": "A short unique ID such as vitamin_d or amoxicillin_pm.",
+          "medication_name": "The name you want to see on buttons, sensors, and notifications.",
+          "dosage": "Examples: 1 tablet, 20 mg, 2 puffs.",
+          "schedules": "Enter one or more times separated by commas, for example 08:00, 20:00.",
+          "quantity": "Optional. How many doses or units you currently have left.",
+          "refill_at": "Optional. Trigger refill warnings when quantity drops to this number or below.",
+          "notes": "Optional notes such as take with food or morning only.",
+          "nfc_tag_id": "Optional. Scan this NFC tag to log the medication as taken.",
+          "notify_service": "Optional. Choose a notify service to send actionable reminders to a phone.",
+          "notification_enabled": "Turn scheduled reminders and missed-dose alerts on or off for this medication.",
+          "reminder_minutes": "How long after the scheduled time the medication should count as due.",
+          "missed_after_minutes": "How long after the scheduled time to treat the dose as missed."
+        }
       },
       "edit_medication_select": {
-        "title": "Choose Medication"
+        "title": "Choose Medication",
+        "description": "Pick a medication to update."
       },
       "edit_medication": {
-        "title": "Edit Medication"
+        "title": "Edit Medication",
+        "description": "Update the medication details, reminder behavior, or refill settings.",
+        "data": {
+          "profile_id": "Profile ID",
+          "profile_name": "Display name",
+          "medication_id": "Medication ID",
+          "medication_name": "Medication name",
+          "dosage": "Dose or strength",
+          "schedules": "Schedule times",
+          "quantity": "Current quantity",
+          "refill_at": "Refill warning threshold",
+          "notes": "Notes",
+          "nfc_tag_id": "NFC tag ID",
+          "notify_service": "Notification service",
+          "notification_enabled": "Enable reminders",
+          "reminder_minutes": "Due reminder window",
+          "missed_after_minutes": "Mark missed after"
+        },
+        "data_description": {
+          "profile_id": "A short unique ID for the person or pet.",
+          "profile_name": "The friendly name shown in Home Assistant.",
+          "medication_id": "The unique medication ID used internally.",
+          "medication_name": "The name shown in Home Assistant.",
+          "dosage": "Examples: 1 tablet, 20 mg, 2 puffs.",
+          "schedules": "Enter one or more times separated by commas, for example 08:00, 20:00.",
+          "quantity": "Optional. How many doses or units you currently have left.",
+          "refill_at": "Optional. Trigger refill warnings when quantity drops to this number or below.",
+          "notes": "Optional notes such as take with food or morning only.",
+          "nfc_tag_id": "Optional. Scan this NFC tag to log the medication as taken.",
+          "notify_service": "Optional. Choose a notify service to send actionable reminders to a phone.",
+          "notification_enabled": "Turn scheduled reminders and missed-dose alerts on or off for this medication.",
+          "reminder_minutes": "How long after the scheduled time the medication should count as due.",
+          "missed_after_minutes": "How long after the scheduled time to treat the dose as missed."
+        }
       },
       "remove_medication_select": {
-        "title": "Remove Medication"
+        "title": "Remove Medication",
+        "description": "Choose a medication to remove from tracking."
       }
     },
     "abort": {
