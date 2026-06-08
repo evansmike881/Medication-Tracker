@@ -29,6 +29,7 @@ class MedicationTrackerManager:
 
     async def async_initialize(self) -> None:
         """Load persisted state."""
+        self.database = await MedicationDatabase.async_load(self.hass)
         self.medications = await self.store.async_load()
 
     async def async_add_medication(

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from homeassistant.components.binary_sensor import BinarySensorEntity
+from homeassistant.components.binary_sensor import BinarySensorEntity, BinarySensorEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -15,19 +13,10 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import ATTR_MEDICATION_ID, ATTR_MEDICATION_NAME, DOMAIN, SIGNAL_MEDICATIONS_UPDATED
 
-
-@dataclass(frozen=True, slots=True)
-class MedicationBinarySensorDescription:
-    """Describe a medication binary sensor."""
-
-    key: str
-    name_suffix: str
-
-
-BINARY_SENSOR_TYPES: tuple[MedicationBinarySensorDescription, ...] = (
-    MedicationBinarySensorDescription(key="due_now", name_suffix="Due Now"),
-    MedicationBinarySensorDescription(key="needs_refill", name_suffix="Needs Refill"),
-    MedicationBinarySensorDescription(key="has_missed_dose", name_suffix="Has Missed Dose"),
+BINARY_SENSOR_TYPES: tuple[BinarySensorEntityDescription, ...] = (
+    BinarySensorEntityDescription(key="due_now", name="Due Now"),
+    BinarySensorEntityDescription(key="needs_refill", name="Needs Refill"),
+    BinarySensorEntityDescription(key="has_missed_dose", name="Has Missed Dose"),
 )
 
 
@@ -88,7 +77,7 @@ class MedicationBinarySensor(CoordinatorEntity, BinarySensorEntity):
     @property
     def name(self) -> str:
         """Return the entity name."""
-        return f"{self._medication_name} {self.entity_description.name_suffix}"
+        return f"{self._medication_name} {self.entity_description.name}"
 
     @property
     def device_info(self) -> DeviceInfo:

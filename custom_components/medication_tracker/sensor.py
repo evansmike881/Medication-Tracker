@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorEntityDescription,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant
@@ -36,65 +39,54 @@ from .const import (
     SIGNAL_MEDICATIONS_UPDATED,
 )
 
-
-@dataclass(frozen=True, slots=True)
-class MedicationSensorDescription:
-    """Describe a medication sensor."""
-
-    key: str
-    name_suffix: str
-    native_unit_of_measurement: str | None = None
-    device_class: SensorDeviceClass | None = None
-
-
-SENSOR_TYPES: tuple[MedicationSensorDescription, ...] = (
-    MedicationSensorDescription(
+SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
+    SensorEntityDescription(
         key=ATTR_NEXT_DOSE,
-        name_suffix="Next Dose",
+        name="Next Dose",
         device_class=SensorDeviceClass.TIMESTAMP,
     ),
-    MedicationSensorDescription(
+    SensorEntityDescription(
         key=ATTR_LAST_TAKEN,
-        name_suffix="Last Dose",
+        name="Last Dose",
         device_class=SensorDeviceClass.TIMESTAMP,
     ),
-    MedicationSensorDescription(
+    SensorEntityDescription(
         key=ATTR_MISSED_DOSES,
-        name_suffix="Missed Doses",
+        name="Missed Doses",
     ),
-    MedicationSensorDescription(
+    SensorEntityDescription(
         key=ATTR_DAYS_REMAINING,
-        name_suffix="Days Remaining",
+        name="Days Remaining",
         native_unit_of_measurement="d",
     ),
-    MedicationSensorDescription(
+    SensorEntityDescription(
         key="compliance_percentage",
-        name_suffix="Compliance",
+        name="Compliance",
         native_unit_of_measurement=PERCENTAGE,
     ),
 )
 
 
-SUMMARY_SENSOR_TYPES: tuple[MedicationSensorDescription, ...] = (
-    MedicationSensorDescription(
+SUMMARY_SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
+    SensorEntityDescription(
         key="medication_count",
-        name_suffix="Medication Count",
+        name="Medication Count",
     ),
-    MedicationSensorDescription(
+    SensorEntityDescription(
         key="due_now_count",
-        name_suffix="Due Now Count",
+        name="Due Now Count",
     ),
-    MedicationSensorDescription(
+    SensorEntityDescription(
         key="missed_dose_count",
-        name_suffix="Missed Dose Count",
+        name="Missed Dose Count",
     ),
-    MedicationSensorDescription(
+    SensorEntityDescription(
         key="refill_needed_count",
-        name_suffix="Refill Needed Count",
+        name="Refill Needed Count",
     ),
-    MedicationSensorDescription(
+    SensorEntityDescription(
         key="next_due",
-        name_suffix="Next Due",
+        name="Next Due",
         device_class=SensorDeviceClass.TIMESTAMP,
     ),
 )
@@ -155,7 +147,7 @@ class MedicationSensor(CoordinatorEntity, SensorEntity):
         manager,
         medication_id: str,
         medication_name: str,
-        description: MedicationSensorDescription,
+        description: SensorEntityDescription,
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
@@ -168,7 +160,7 @@ class MedicationSensor(CoordinatorEntity, SensorEntity):
     @property
     def name(self) -> str:
         """Return the entity name."""
-        return f"{self._medication_name} {self.entity_description.name_suffix}"
+        return f"{self._medication_name} {self.entity_description.name}"
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -231,7 +223,7 @@ class MedicationSummarySensor(CoordinatorEntity, SensorEntity):
 
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator, manager, description: MedicationSensorDescription) -> None:
+    def __init__(self, coordinator, manager, description: SensorEntityDescription) -> None:
         """Initialize a summary sensor."""
         super().__init__(coordinator)
         self._manager = manager
@@ -241,7 +233,7 @@ class MedicationSummarySensor(CoordinatorEntity, SensorEntity):
     @property
     def name(self) -> str:
         """Return the entity name."""
-        return f"Medication Tracker {self.entity_description.name_suffix}"
+        return f"Medication Tracker {self.entity_description.name}"
 
     @property
     def device_info(self) -> DeviceInfo:

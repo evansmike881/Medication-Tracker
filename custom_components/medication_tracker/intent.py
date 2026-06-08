@@ -17,6 +17,11 @@ async def async_register_intents(hass: HomeAssistant) -> None:
     hass.data[DOMAIN]["intents_registered"] = True
 
 
+async def async_setup_intents(hass: HomeAssistant) -> None:
+    """Home Assistant intent platform hook."""
+    await async_register_intents(hass)
+
+
 class MedicationBaseIntent(intent.IntentHandler):
     """Shared helper methods for medication intents."""
 
