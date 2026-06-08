@@ -1,0 +1,15 @@
+language: "en"
+intents:
+  MedicationStatusIntent:
+    data:
+      - sentences:
+          - "did I take {medication}"
+          - "did [we] take {medication}"
+          - "has {medication} been taken"
+          - "when is the next dose of {medication}"
+  MedicationLogIntent:
+    data:
+      - sentences:
+          - "log {medication} as taken"
+          - "mark {medication} as taken"
+          - "I took {medication}"

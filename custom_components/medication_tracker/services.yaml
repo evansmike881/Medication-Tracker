@@ -1,0 +1,109 @@
+add_medication:
+  name: Add medication
+  description: Create or update a medication schedule for a person or pet. The integration options UI is the preferred admin flow, but services remain available for automations.
+  fields:
+    profile_id:
+      required: true
+      selector:
+        text:
+    profile_name:
+      required: true
+      selector:
+        text:
+    medication_id:
+      required: true
+      selector:
+        text:
+    medication_name:
+      required: true
+      selector:
+        text:
+    dosage:
+      required: true
+      selector:
+        text:
+    schedules:
+      required: true
+      example: ["08:00", "20:00"]
+      selector:
+        object:
+    quantity:
+      required: false
+      selector:
+        number:
+          min: 0
+          mode: box
+    refill_at:
+      required: false
+      selector:
+        number:
+          min: 0
+          mode: box
+    notes:
+      required: false
+      selector:
+        text:
+    database_entry_id:
+      required: false
+      selector:
+        text:
+    nfc_tag_id:
+      required: false
+      selector:
+        text:
+    notification_enabled:
+      required: false
+      selector:
+        boolean:
+    notify_service:
+      required: false
+      example: notify.mobile_app_pixel_9
+      selector:
+        text:
+    reminder_minutes:
+      required: false
+      selector:
+        number:
+          min: 1
+          mode: box
+    missed_after_minutes:
+      required: false
+      selector:
+        number:
+          min: 1
+          mode: box
+log_dose:
+  name: Log dose
+  description: Record that a scheduled or manual dose has been taken.
+  fields:
+    medication_id:
+      required: true
+      selector:
+        text:
+    taken_at:
+      required: false
+      example: "2026-06-08T08:05:00+01:00"
+      selector:
+        text:
+remove_medication:
+  name: Remove medication
+  description: Remove a medication and its sensors.
+  fields:
+    medication_id:
+      required: true
+      selector:
+        text:
+refill_medication:
+  name: Refill medication
+  description: Increase the remaining quantity for a medication.
+  fields:
+    medication_id:
+      required: true
+      selector:
+        text:
+    quantity:
+      required: true
+      selector:
+        number:
+          min: 0
+          mode: box

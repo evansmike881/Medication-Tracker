@@ -1,0 +1,40 @@
+title: Medication Tracker
+views:
+  - title: Overview
+    path: medication-tracker
+    cards:
+      - type: heading
+        heading: Medication Tracker
+      - type: grid
+        columns: 2
+        square: false
+        cards:
+          - type: tile
+            entity: sensor.medication_tracker_medication_count
+            name: Active medications
+          - type: tile
+            entity: sensor.medication_tracker_due_now_count
+            name: Due now
+          - type: tile
+            entity: sensor.medication_tracker_missed_dose_count
+            name: Missed doses
+          - type: tile
+            entity: sensor.medication_tracker_refill_needed_count
+            name: Refills needed
+      - type: entities
+        title: Summary
+        entities:
+          - entity: sensor.medication_tracker_next_due
+            name: Next household dose
+          - entity: sensor.medication_tracker_due_now_count
+          - entity: sensor.medication_tracker_missed_dose_count
+          - entity: sensor.medication_tracker_refill_needed_count
+      - type: markdown
+        content: |
+          Add per-medication entities with the UI by selecting entities from the Medication Tracker devices.
+          Useful entity types include:
+          - `button.<medication>_log_dose`
+          - `sensor.<medication>_next_dose`
+          - `sensor.<medication>_last_dose`
+          - `binary_sensor.<medication>_due_now`
+          - `binary_sensor.<medication>_needs_refill`

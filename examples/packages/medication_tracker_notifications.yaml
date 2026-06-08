@@ -1,0 +1,32 @@
+automation:
+  - id: medication_tracker_due_mobile_notification
+    alias: Medication Tracker Due Notification
+    mode: parallel
+    trigger:
+      - platform: event
+        event_type: medication_tracker_dose_due
+    action:
+      - service: notify.notify
+        data:
+          message: "{{ trigger.event.data.notification_message }}"
+          data:
+            tag: "medication_tracker_{{ trigger.event.data.medication_id }}"
+            actions:
+              - action: "MEDICATION_CONFIRMED_{{ trigger.event.data.medication_id }}"
+                title: Taken
+
+  - id: medication_tracker_missed_mobile_notification
+    alias: Medication Tracker Missed Dose Notification
+    mode: parallel
+    trigger:
+      - platform: event
+        event_type: medication_tracker_dose_missed
+    action:
+      - service: notify.notify
+        data:
+          message: "{{ trigger.event.data.notification_message }}"
+          data:
+            tag: "medication_tracker_missed_{{ trigger.event.data.medication_id }}"
+            actions:
+              - action: "MEDICATION_CONFIRMED_{{ trigger.event.data.medication_id }}"
+                title: Mark Taken

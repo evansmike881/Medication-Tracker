@@ -1,0 +1,124 @@
+{
+  "medications": [
+    {
+      "id": "acetaminophen",
+      "name": "Acetaminophen",
+      "aliases": ["Paracetamol", "Tylenol"],
+      "default_dosage": "500 mg",
+      "category": "Pain relief",
+      "notes": "General pain and fever relief."
+    },
+    {
+      "id": "ibuprofen",
+      "name": "Ibuprofen",
+      "aliases": ["Advil", "Motrin"],
+      "default_dosage": "200 mg",
+      "category": "Pain relief",
+      "notes": "Often taken with food if it causes stomach upset."
+    },
+    {
+      "id": "amoxicillin",
+      "name": "Amoxicillin",
+      "aliases": ["Amoxil"],
+      "default_dosage": "500 mg",
+      "category": "Antibiotic",
+      "notes": "Complete the full prescribed course."
+    },
+    {
+      "id": "lisinopril",
+      "name": "Lisinopril",
+      "aliases": ["Prinivil", "Zestril"],
+      "default_dosage": "10 mg",
+      "category": "Blood pressure",
+      "notes": "Commonly taken once daily."
+    },
+    {
+      "id": "metformin",
+      "name": "Metformin",
+      "aliases": ["Glucophage"],
+      "default_dosage": "500 mg",
+      "category": "Diabetes",
+      "notes": "Often taken with meals."
+    },
+    {
+      "id": "atorvastatin",
+      "name": "Atorvastatin",
+      "aliases": ["Lipitor"],
+      "default_dosage": "20 mg",
+      "category": "Cholesterol",
+      "notes": "Usually taken once daily."
+    },
+    {
+      "id": "levothyroxine",
+      "name": "Levothyroxine",
+      "aliases": ["Synthroid"],
+      "default_dosage": "50 mcg",
+      "category": "Thyroid",
+      "notes": "Often taken on an empty stomach."
+    },
+    {
+      "id": "omeprazole",
+      "name": "Omeprazole",
+      "aliases": ["Prilosec"],
+      "default_dosage": "20 mg",
+      "category": "Reflux",
+      "notes": "Typically taken before meals."
+    },
+    {
+      "id": "cetirizine",
+      "name": "Cetirizine",
+      "aliases": ["Zyrtec"],
+      "default_dosage": "10 mg",
+      "category": "Allergy",
+      "notes": "Used for allergy symptom relief."
+    },
+    {
+      "id": "loratadine",
+      "name": "Loratadine",
+      "aliases": ["Claritin"],
+      "default_dosage": "10 mg",
+      "category": "Allergy",
+      "notes": "Non-drowsy allergy medication for many people."
+    },
+    {
+      "id": "sertraline",
+      "name": "Sertraline",
+      "aliases": ["Zoloft"],
+      "default_dosage": "50 mg",
+      "category": "Mental health",
+      "notes": "Take consistently at the same time each day."
+    },
+    {
+      "id": "fluoxetine",
+      "name": "Fluoxetine",
+      "aliases": ["Prozac"],
+      "default_dosage": "20 mg",
+      "category": "Mental health",
+      "notes": "Often taken once per day."
+    },
+    {
+      "id": "prednisone",
+      "name": "Prednisone",
+      "aliases": [],
+      "default_dosage": "10 mg",
+      "category": "Steroid",
+      "notes": "Follow taper instructions exactly if prescribed."
+    },
+    {
+      "id": "albuterol",
+      "name": "Albuterol",
+      "aliases": ["Ventolin", "ProAir"],
+      "default_dosage": "2 puffs",
+      "category": "Respiratory",
+      "notes": "Often used as a rescue inhaler."
+    },
+    {
+      "id": "insulin_glargine",
+      "name": "Insulin Glargine",
+      "aliases": ["Lantus", "Basaglar"],
+      "default_dosage": "As prescribed",
+      "category": "Diabetes",
+      "notes": "Long-acting insulin."
+    }
+  ]
+}

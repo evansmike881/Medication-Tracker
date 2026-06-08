@@ -1,0 +1,47 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Medication Tracker",
+        "description": "Create a Medication Tracker entry and manage medications through integration options.",
+        "data": {
+          "title": "Display name"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Only one Medication Tracker entry is supported."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Medication Tracker",
+        "menu_options": {
+          "add_medication_pick_database": "Add medication",
+          "edit_medication_select": "Edit medication",
+          "remove_medication_select": "Remove medication"
+        }
+      },
+      "add_medication_pick_database": {
+        "title": "Medication Catalog",
+        "description": "Choose a bundled medication template or continue with a custom medication."
+      },
+      "add_medication": {
+        "title": "Add Medication"
+      },
+      "edit_medication_select": {
+        "title": "Choose Medication"
+      },
+      "edit_medication": {
+        "title": "Edit Medication"
+      },
+      "remove_medication_select": {
+        "title": "Remove Medication"
+      }
+    },
+    "abort": {
+      "no_medications": "No medications are currently configured."
+    }
+  }
+}
