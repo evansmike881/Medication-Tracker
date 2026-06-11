@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import logging
 from pathlib import Path
 from typing import Any
@@ -177,7 +178,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     async def handle_log_dose(call: ServiceCall) -> None:
         runtime_data = _get_runtime_data(hass)
         taken_at = call.data.get(ATTR_TAKEN_AT)
-        if taken_at and dt_util.is_naive(taken_at):
+        if taken_at and _is_naive_datetime(taken_at):
             taken_at = dt_util.as_local(dt_util.as_utc(taken_at))
         await runtime_data["manager"].async_log_dose(
             call.data[ATTR_MEDICATION_ID],
@@ -232,6 +233,11 @@ def _get_runtime_data(hass: HomeAssistant) -> dict[str, Any]:
     """Return the single runtime payload."""
     entry_ids = [key for key in hass.data[DOMAIN] if key != "logger"]
     return hass.data[DOMAIN][entry_ids[0]]
+
+
+def _is_naive_datetime(value: datetime) -> bool:
+    """Return whether a datetime has no usable timezone info."""
+    return value.tzinfo is None or value.tzinfo.utcoffset(value) is None
 
 
 async def _async_register_frontend(hass: HomeAssistant) -> None:

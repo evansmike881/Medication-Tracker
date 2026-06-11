@@ -115,7 +115,7 @@ class MedicationTrackerManager:
         """Log a dose for a medication."""
         medication = self._get_medication(medication_id)
         timestamp = taken_at or dt_util.now()
-        if dt_util.is_naive(timestamp):
+        if _is_naive_datetime(timestamp):
             timestamp = dt_util.as_local(dt_util.as_utc(timestamp))
         medication.dose_logs.append(
             DoseLog(
@@ -569,3 +569,8 @@ class MedicationTrackerManager:
             statuses[occurrence_key] = "On Track"
 
         return statuses
+
+
+def _is_naive_datetime(value: datetime) -> bool:
+    """Return whether a datetime has no usable timezone info."""
+    return value.tzinfo is None or value.tzinfo.utcoffset(value) is None
