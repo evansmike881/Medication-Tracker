@@ -265,12 +265,8 @@ class MedicationTrackerManager:
         for medication in sorted(self.medications.values(), key=lambda item: (item.profile_name.lower(), item.name.lower())):
             snapshot = self.get_snapshot(medication.medication_id)
             entity_base = slugify(medication.name)
-            status = "On Track"
-            if snapshot["missed_doses"] > 0:
-                status = "Missed Dose"
-            elif snapshot["due_now"]:
-                status = "Due Now"
-            elif snapshot["needs_refill"]:
+            status = self._current_display_status(medication, now)
+            if status == "On Track" and snapshot["needs_refill"]:
                 status = "Needs Refill"
 
             rows.append(
@@ -569,6 +565,31 @@ class MedicationTrackerManager:
             statuses[occurrence_key] = "On Track"
 
         return statuses
+
+    def _current_display_status(self, medication: Medication, now: datetime) -> str:
+        """Return a card-friendly status based on today's scheduled doses."""
+        today_occurrences = self._scheduled_occurrences(medication, now.date(), now.date())
+        if not today_occurrences:
+            return "On Track"
+
+        matched_today = set(self._matched_occurrences(medication, today_occurrences))
+        has_taken_today = False
+
+        for occurrence in today_occurrences:
+            if occurrence in matched_today:
+                has_taken_today = True
+                continue
+
+            if now >= occurrence + timedelta(minutes=medication.missed_after_minutes):
+                return "Missed Dose"
+
+            if occurrence <= now <= occurrence + timedelta(minutes=medication.reminder_minutes):
+                return "Due Now"
+
+        if has_taken_today:
+            return "Taken"
+
+        return "On Track"
 
 
 def _is_naive_datetime(value: datetime) -> bool:
