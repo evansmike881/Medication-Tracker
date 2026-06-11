@@ -29,6 +29,8 @@ const WEEKLY_DEFAULT_CONFIG = {
   entity: "sensor.medication_tracker_medication_registry",
   title: "Weekly Pill Box",
   profile_name: "",
+  today_only: false,
+  layout_mode: "horizontal",
   show_header: true,
   show_summary: true,
   show_status_chip: true,
@@ -66,6 +68,19 @@ function formatDate(value, fallback) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function buildOccurrenceKey(targetDate, schedule) {
+  const [hours = "0", minutes = "0"] = String(schedule || "00:00").split(":");
+  const occurrence = new Date(targetDate);
+  occurrence.setHours(Number(hours), Number(minutes), 0, 0);
+
+  const year = occurrence.getFullYear();
+  const month = String(occurrence.getMonth() + 1).padStart(2, "0");
+  const day = String(occurrence.getDate()).padStart(2, "0");
+  const hour = String(occurrence.getHours()).padStart(2, "0");
+  const minute = String(occurrence.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hour}:${minute}`;
 }
 
 function dispatchMoreInfo(target, entityId) {
@@ -331,6 +346,10 @@ class MedicationTrackerCard extends HTMLElement {
         .chip.on-track {
           background: rgba(46, 125, 50, 0.14);
           color: #2e7d32;
+        }
+        .chip.taken {
+          background: rgba(2, 119, 189, 0.15);
+          color: #0277bd;
         }
         .chip.due-now {
           background: rgba(239, 108, 0, 0.16);
@@ -601,7 +620,10 @@ class MedicationTrackerWeeklyCard extends HTMLElement {
   }
 
   getCardSize() {
-    return this._config?.compact_rows ? 8 : 10;
+    if (this._config?.today_only) {
+      return this._config?.compact_rows ? 4 : 5;
+    }
+    return this._config?.compact_rows ? 6 : 8;
   }
 
   _renderCard() {
@@ -609,61 +631,74 @@ class MedicationTrackerWeeklyCard extends HTMLElement {
     card.innerHTML = `
       <style>
         .wrap {
-          padding: 18px;
+          padding: 14px;
         }
         .header {
           display: flex;
           align-items: baseline;
           justify-content: space-between;
           gap: 12px;
-          margin-bottom: 16px;
+          margin-bottom: 12px;
         }
         .header.hidden,
         .summary.hidden {
           display: none;
         }
         .title {
-          font-size: 1.35rem;
+          font-size: 1.18rem;
           font-weight: 700;
           letter-spacing: -0.02em;
         }
         .subtitle {
           opacity: 0.7;
-          font-size: 0.92rem;
+          font-size: 0.84rem;
         }
         .summary {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-          gap: 10px;
-          margin-bottom: 18px;
+          grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+          gap: 8px;
+          margin-bottom: 12px;
         }
         .summary-tile {
-          border-radius: 14px;
-          padding: 12px;
+          border-radius: 12px;
+          padding: 10px;
           background: rgba(var(--rgb-primary-color), 0.06);
           border: 1px solid rgba(var(--rgb-primary-color), 0.12);
         }
         .summary-label {
-          font-size: 0.78rem;
+          font-size: 0.74rem;
           opacity: 0.72;
-          margin-bottom: 4px;
+          margin-bottom: 3px;
         }
         .summary-value {
-          font-size: 1.1rem;
+          font-size: 1rem;
           font-weight: 700;
         }
         .week-grid {
           display: grid;
-          gap: 12px;
+          gap: 10px;
+        }
+        .week-grid.horizontal {
+          grid-auto-flow: column;
+          grid-auto-columns: minmax(190px, 1fr);
+          overflow-x: auto;
+          padding-bottom: 2px;
+          scroll-snap-type: x proximity;
+        }
+        .week-grid.vertical {
           grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
         }
         .day-box {
           border: 1px solid var(--divider-color);
-          border-radius: 20px;
-          padding: 14px;
+          border-radius: 16px;
+          padding: 12px;
           background:
             linear-gradient(180deg, rgba(var(--rgb-primary-color), 0.05), rgba(var(--rgb-primary-color), 0.015)),
             rgba(var(--rgb-primary-text-color), 0.015);
+          min-width: 0;
+        }
+        .week-grid.horizontal .day-box {
+          scroll-snap-align: start;
         }
         .day-box.today {
           border-color: rgba(var(--rgb-primary-color), 0.35);
@@ -674,52 +709,53 @@ class MedicationTrackerWeeklyCard extends HTMLElement {
           align-items: baseline;
           justify-content: space-between;
           gap: 10px;
-          margin-bottom: 12px;
+          margin-bottom: 10px;
         }
         .day-name {
-          font-size: 1rem;
+          font-size: 0.95rem;
           font-weight: 700;
         }
         .day-date {
-          font-size: 0.82rem;
+          font-size: 0.78rem;
           opacity: 0.72;
         }
         .day-count {
-          font-size: 0.8rem;
+          font-size: 0.76rem;
           opacity: 0.72;
         }
         .day-list {
           display: grid;
-          gap: 8px;
+          gap: 6px;
         }
         .pill {
-          border-radius: 16px;
+          border-radius: 14px;
           background: rgba(var(--rgb-primary-text-color), 0.03);
           border: 1px solid rgba(var(--rgb-primary-text-color), 0.06);
           overflow: hidden;
         }
         .pill.compact {
-          border-radius: 14px;
+          border-radius: 12px;
         }
         .pill-head {
           display: flex;
           align-items: flex-start;
           justify-content: space-between;
           gap: 10px;
-          padding: 10px 12px;
+          padding: 9px 10px;
           cursor: pointer;
         }
         .pill-name {
           font-weight: 700;
-          font-size: 0.96rem;
+          font-size: 0.9rem;
+          line-height: 1.2;
         }
         .pill-meta {
-          font-size: 0.84rem;
+          font-size: 0.79rem;
           opacity: 0.72;
           margin-top: 2px;
         }
         .pill-body {
-          padding: 0 12px 12px;
+          padding: 0 10px 10px;
         }
         .pill-body.hidden {
           display: none;
@@ -727,33 +763,34 @@ class MedicationTrackerWeeklyCard extends HTMLElement {
         .pill-detail {
           display: grid;
           gap: 4px;
-          margin-bottom: 10px;
+          margin-bottom: 8px;
         }
         .pill-detail:last-of-type {
-          margin-bottom: 12px;
+          margin-bottom: 10px;
         }
         .pill-detail-label {
-          font-size: 0.76rem;
+          font-size: 0.72rem;
           opacity: 0.68;
         }
         .pill-detail-value {
-          font-size: 0.9rem;
+          font-size: 0.86rem;
           font-weight: 600;
         }
         .actions {
           display: flex;
           flex-wrap: wrap;
-          gap: 8px;
+          gap: 6px;
         }
         .action {
           border: 0;
-          border-radius: 12px;
-          padding: 9px 11px;
+          border-radius: 10px;
+          padding: 8px 10px;
           font: inherit;
           cursor: pointer;
           background: var(--primary-color);
           color: var(--text-primary-color);
           font-weight: 700;
+          font-size: 0.8rem;
         }
         .action.secondary {
           background: rgba(var(--rgb-primary-text-color), 0.07);
@@ -763,14 +800,18 @@ class MedicationTrackerWeeklyCard extends HTMLElement {
           display: inline-flex;
           align-items: center;
           border-radius: 999px;
-          padding: 5px 9px;
-          font-size: 0.74rem;
+          padding: 4px 8px;
+          font-size: 0.7rem;
           font-weight: 700;
           white-space: nowrap;
         }
         .chip.on-track {
           background: rgba(46, 125, 50, 0.14);
           color: #2e7d32;
+        }
+        .chip.taken {
+          background: rgba(2, 119, 189, 0.15);
+          color: #0277bd;
         }
         .chip.due-now {
           background: rgba(239, 108, 0, 0.16);
@@ -789,10 +830,11 @@ class MedicationTrackerWeeklyCard extends HTMLElement {
           opacity: 0.7;
         }
         .empty {
-          padding: 14px;
-          border-radius: 16px;
+          padding: 10px;
+          border-radius: 12px;
           background: rgba(var(--rgb-primary-text-color), 0.03);
           opacity: 0.72;
+          font-size: 0.82rem;
         }
       </style>
       <div class="wrap">
@@ -827,11 +869,14 @@ class MedicationTrackerWeeklyCard extends HTMLElement {
     }
 
     const selectedLabel = this._config.profile_name || "All people and pets";
+    const scopeLabel = this._config.today_only
+      ? "Today only"
+      : `${Math.max(1, Number(this._config.days_to_show || 7))} day view`;
     this._header.innerHTML = this._config.show_header
       ? `
         <div>
           <div class="title">${this._config.title}</div>
-          <div class="subtitle">${selectedLabel}</div>
+          <div class="subtitle">${selectedLabel} | ${scopeLabel}</div>
         </div>
         <div class="subtitle">${filteredRows.length} medications</div>
       `
@@ -869,6 +914,8 @@ class MedicationTrackerWeeklyCard extends HTMLElement {
       this._weekGrid.innerHTML = `<div class="empty">No medications matched this view.</div>`;
       return;
     }
+
+    this._weekGrid.className = `week-grid ${this._config.layout_mode === "vertical" ? "vertical" : "horizontal"}`;
 
     if (this._config.collapsible_items && this._config.expand_today) {
       const todayBox = visibleDays.find((day) => day.isToday && day.items.length);
@@ -1004,7 +1051,7 @@ class MedicationTrackerWeeklyCard extends HTMLElement {
   _buildWeeklySchedule(rows) {
     const now = new Date();
     const days = [];
-    const totalDays = Math.max(1, Number(this._config.days_to_show || 7));
+    const totalDays = this._config.today_only ? 1 : Math.max(1, Number(this._config.days_to_show || 7));
 
     for (let offset = 0; offset < totalDays; offset += 1) {
       const target = new Date(now);
@@ -1014,10 +1061,12 @@ class MedicationTrackerWeeklyCard extends HTMLElement {
       const items = [];
       rows.forEach((row) => {
         (row.schedules || []).forEach((schedule) => {
+          const occurrenceKey = buildOccurrenceKey(target, schedule);
           items.push({
             ...row,
             schedule,
             dayOffset: offset,
+            status: row.schedule_statuses?.[occurrenceKey] || (offset === 0 ? row.status : "On Track"),
             itemId: `${row.medication_id}_${offset}_${schedule}`,
           });
         });
@@ -1207,6 +1256,14 @@ class MedicationTrackerWeeklyCardEditor extends HTMLElement {
           <div class="section-title">Layout</div>
           <div class="section-copy">Keep the weekly view clean and compact, or show more detail when needed.</div>
           <div class="field">
+            <label class="label" for="layout_mode">Layout mode</label>
+            <select id="layout_mode">
+              <option value="horizontal" ${this._config.layout_mode === "horizontal" ? "selected" : ""}>Horizontal day strip</option>
+              <option value="vertical" ${this._config.layout_mode === "vertical" ? "selected" : ""}>Vertical stacked days</option>
+            </select>
+            <div class="hint">Horizontal keeps the card shorter. Vertical is easier to scan down a page.</div>
+          </div>
+          <div class="field">
             <label class="label" for="days_to_show">Days to show</label>
             <input id="days_to_show" type="number" min="1" max="7" step="1" value="${Number(this._config.days_to_show || 7)}">
             <div class="hint">Use up to 7 days for a full weekly pill-box layout.</div>
@@ -1219,6 +1276,7 @@ class MedicationTrackerWeeklyCardEditor extends HTMLElement {
           <div class="toggle-grid">
             ${toggleMarkup(this._config, "show_header", "Show header", "Displays the title and current person or pet.")}
             ${toggleMarkup(this._config, "show_summary", "Show weekly summary", "Shows quick totals for the selected weekly view.")}
+            ${toggleMarkup(this._config, "today_only", "Show today only", "Collapses the card down to just today's medication box for a much smaller footprint.")}
             ${toggleMarkup(this._config, "show_empty_days", "Show empty day boxes", "Keeps all seven boxes visible even if no medications are scheduled.")}
             ${toggleMarkup(this._config, "compact_rows", "Use compact medication items", "Makes the items inside each day box tighter and shorter.")}
             ${toggleMarkup(this._config, "collapsible_items", "Collapse medication items", "Lets each medication entry open only when clicked.")}
@@ -1257,6 +1315,7 @@ class MedicationTrackerWeeklyCardEditor extends HTMLElement {
       ...this._config,
       entity: this.querySelector("#entity")?.value || this._config.entity,
       profile_name: this.querySelector("#profile_name")?.value || "",
+      layout_mode: this.querySelector("#layout_mode")?.value || "horizontal",
       title: title || WEEKLY_DEFAULT_CONFIG.title,
       days_to_show: Math.min(7, Math.max(1, Number(daysToShowValue || 7))),
       max_items_per_day: Number(maxItemsValue || 0),

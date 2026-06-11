@@ -261,6 +261,7 @@ class MedicationTrackerManager:
     def get_registry_rows(self) -> list[dict[str, Any]]:
         """Return medication rows for dashboard registry views."""
         rows: list[dict[str, Any]] = []
+        now = dt_util.now()
         for medication in sorted(self.medications.values(), key=lambda item: (item.profile_name.lower(), item.name.lower())):
             snapshot = self.get_snapshot(medication.medication_id)
             entity_base = slugify(medication.name)
@@ -294,6 +295,7 @@ class MedicationTrackerManager:
                     "caregiver_name": snapshot["caregiver_name"],
                     "caregiver_confirmation_needed": snapshot["caregiver_confirmation_needed"],
                     "compliance_percentage": snapshot["compliance_percentage"],
+                    "schedule_statuses": self._schedule_statuses(medication, now),
                     "button_entity_id": f"button.{entity_base}_log_dose",
                     "next_dose_entity_id": f"sensor.{entity_base}_next_dose",
                     "last_dose_entity_id": f"sensor.{entity_base}_last_dose",
@@ -542,3 +544,28 @@ class MedicationTrackerManager:
             if now >= occurrence + timedelta(minutes=medication.missed_after_minutes):
                 missed += 1
         return missed
+
+    def _schedule_statuses(self, medication: Medication, now: datetime, days_ahead: int = 30) -> dict[str, str]:
+        """Return day-and-time specific statuses for upcoming scheduled doses."""
+        end_date = now.date() + timedelta(days=max(days_ahead - 1, 0))
+        occurrences = self._scheduled_occurrences(medication, now.date(), end_date)
+        matched_occurrences = set(self._matched_occurrences(medication, occurrences))
+        statuses: dict[str, str] = {}
+
+        for occurrence in occurrences:
+            occurrence_key = occurrence.strftime("%Y-%m-%dT%H:%M")
+            if occurrence in matched_occurrences:
+                statuses[occurrence_key] = "Taken"
+                continue
+
+            if now >= occurrence + timedelta(minutes=medication.missed_after_minutes):
+                statuses[occurrence_key] = "Missed Dose"
+                continue
+
+            if occurrence <= now <= occurrence + timedelta(minutes=medication.reminder_minutes):
+                statuses[occurrence_key] = "Due Now"
+                continue
+
+            statuses[occurrence_key] = "On Track"
+
+        return statuses
