@@ -175,6 +175,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Medication Tracker from a config entry."""
     await _async_register_frontend(hass)
+    await _async_sync_custom_sentences(hass)
     manager = MedicationTrackerManager(hass)
     await manager.async_initialize()
 
@@ -351,6 +352,20 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     )
     add_extra_js_url(hass, f"{CARD_PATH_V2}?v={cache_buster}")
     hass.data[DOMAIN]["frontend_registered"] = True
+
+
+async def _async_sync_custom_sentences(hass: HomeAssistant) -> None:
+    """Copy packaged Assist sentences into Home Assistant custom_sentences."""
+    source_path = Path(__file__).parent / "sentences" / "en" / "medication_tracker.yaml"
+    target_path = Path(hass.config.path("custom_sentences", "en", "medication_tracker.yaml"))
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    source_content = source_path.read_text(encoding="utf-8")
+    current_content = target_path.read_text(encoding="utf-8") if target_path.exists() else None
+    if current_content == source_content:
+        return
+
+    target_path.write_text(source_content, encoding="utf-8")
 
 
 async def _async_handle_tag_scanned(hass: HomeAssistant, event: Event) -> None:
