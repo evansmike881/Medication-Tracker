@@ -4,6 +4,9 @@ Medication Tracker is a Home Assistant integration built for one very real probl
 
 I wanted this to feel like a proper product inside Home Assistant, not just a handful of scripts. The goal is simple: make medication routines easier to trust, easier to check, and easier to act on for yourself, your family, or your pets.
 
+> [!WARNING]
+> Medication Tracker is not medical advice, not a medical device, and must not be your only safeguard for medication routines. Always verify doses, timing, and instructions against professional guidance and the official medication packaging.
+
 ## Important disclaimer
 
 Medication Tracker is provided for convenience, organization, and informational use only.
