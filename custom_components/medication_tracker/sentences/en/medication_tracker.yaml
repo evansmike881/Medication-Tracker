@@ -8,6 +8,9 @@ intents:
   MedicationStatusIntent:
     data:
       - sentences:
+          - "medication status for {medication}"
+          - "medication check for {medication}"
+          - "medication info for {medication}"
           - "did I take {medication}"
           - "have I taken {medication}"
           - "did [we] take {medication}"
@@ -31,6 +34,9 @@ intents:
           - "when do I need to take {medication}"
           - "when is the next time for {medication}"
       - sentences:
+          - "medication status for {profile} {medication}"
+          - "medication check for {profile} {medication}"
+          - "medication info for {profile} {medication}"
           - "did {profile} take {medication}"
           - "has {profile} taken {medication}"
           - "has {profile} had {medication}"
@@ -45,6 +51,9 @@ intents:
   MedicationLogIntent:
     data:
       - sentences:
+          - "log medication {medication} as taken"
+          - "mark medication {medication} as taken"
+          - "record medication {medication} as taken"
           - "log {medication} as taken"
           - "mark {medication} as taken"
           - "I took {medication}"
@@ -55,6 +64,9 @@ intents:
           - "record {medication} as taken"
           - "log that I took {medication}"
       - sentences:
+          - "log medication {medication} for {profile} as taken"
+          - "mark medication {medication} for {profile} as taken"
+          - "record medication {medication} for {profile} as taken"
           - "log {profile}'s {medication} as taken"
           - "mark {profile}'s {medication} as taken"
           - "{profile} took {medication}"
@@ -64,37 +76,63 @@ intents:
   MedicationDueIntent:
     data:
       - sentences:
+          - "medication due list"
+          - "medication due now"
+          - "medication schedule now"
+          - "medication status due now"
+          - "medications due now"
+          - "due medications"
+          - "due medication list"
           - "which medication is due"
           - "which meds are due"
           - "which medications are due now"
+          - "which meds are due now"
           - "which medications do I need to take now"
           - "which medications do we need to take now"
           - "tell me what medication is due"
           - "tell me which medications are due"
+          - "tell me which meds are due now"
           - "tell me what I need to take"
           - "tell me what we need to take"
           - "list medications due now"
           - "list due medications"
+          - "show due medications"
+          - "show me due medications"
+          - "show medications due now"
           - "what is the next medication due"
           - "what medications are coming up"
       - sentences:
+          - "medication due list for {profile}"
+          - "medication due now for {profile}"
+          - "medication schedule now for {profile}"
+          - "medications due now for {profile}"
+          - "due medications for {profile}"
           - "which medication is due for {profile}"
           - "which meds are due for {profile}"
           - "which medications are due now for {profile}"
+          - "which meds are due now for {profile}"
           - "tell me what {profile} needs to take"
           - "tell me which medications are due for {profile}"
+          - "tell me which meds are due for {profile}"
           - "list due medications for {profile}"
+          - "show due medications for {profile}"
           - "what medications are coming up for {profile}"
           - "what is the next medication for {profile}"
   MedicationRefillIntent:
     data:
       - sentences:
+          - "medication refill list"
+          - "medication stock check"
+          - "medication low stock list"
           - "what needs a refill"
           - "what medications need refills"
           - "which meds are running low"
           - "what medication is running low"
           - "do any medications need a refill"
       - sentences:
+          - "medication refill list for {profile}"
+          - "medication stock check for {profile}"
+          - "medication low stock list for {profile}"
           - "what needs a refill for {profile}"
           - "which meds are running low for {profile}"
           - "does {profile} need any refills"

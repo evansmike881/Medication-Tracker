@@ -207,6 +207,16 @@ Example phrases:
 - `What does Bella need to take`
 - `Does Mum need any refills`
 
+Reliable Assist phrases:
+
+- `Medication status for omeprazole`
+- `Medication due list`
+- `Medication due now for Mike`
+- `Medication refill list`
+- `Medication stock check for Bella`
+- `Log medication omeprazole as taken`
+- `Log medication omeprazole for Mike as taken`
+
 ## NFC
 
 Set an `nfc_tag_id` on a medication and scan that tag to log the dose automatically.
