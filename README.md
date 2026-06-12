@@ -197,8 +197,15 @@ An example notification package lives at [examples/packages/medication_tracker_n
 Example phrases:
 
 - `Did I take Vitamin D`
+- `Have I taken omeprazole`
 - `When is the next dose of Vitamin D`
+- `When is omeprazole due`
+- `What medications are due now`
+- `What medications are running low`
 - `Log Vitamin D as taken`
+- `Has Mike taken omeprazole`
+- `What does Bella need to take`
+- `Does Mum need any refills`
 
 ## NFC
 
