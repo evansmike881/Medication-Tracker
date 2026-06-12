@@ -38,8 +38,12 @@ class MedicationBaseIntent(intent.IntentHandler):
 
     @property
     def _runtime_data(self) -> dict:
-        entry_ids = [key for key in self.hass.data[DOMAIN] if key not in {"logger", "intents_registered"}]
-        return self.hass.data[DOMAIN][entry_ids[0]]
+        for key, value in self.hass.data[DOMAIN].items():
+            if key == "logger":
+                continue
+            if isinstance(value, dict) and "manager" in value:
+                return value
+        raise intent.IntentHandleError("Medication Tracker is not fully initialized yet.")
 
     @property
     def _manager(self):

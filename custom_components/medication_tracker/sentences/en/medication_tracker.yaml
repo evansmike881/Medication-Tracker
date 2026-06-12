@@ -1,4 +1,9 @@
 language: "en"
+lists:
+  medication:
+    wildcard: true
+  profile:
+    wildcard: true
 intents:
   MedicationStatusIntent:
     data:
