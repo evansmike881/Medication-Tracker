@@ -432,11 +432,14 @@ def _async_prune_orphaned_registry_entries(hass: HomeAssistant, valid_medication
 
     device_registry = dr.async_get(hass)
     for device in list(device_registry.devices.values()):
-        medication_ids = {
-            identifier_value
-            for identifier_domain, identifier_value in device.identifiers
-            if identifier_domain == DOMAIN and identifier_value != "summary"
-        }
+        medication_ids: set[str] = set()
+        for identifier in device.identifiers:
+            if len(identifier) < 2:
+                continue
+            identifier_domain = identifier[0]
+            identifier_value = identifier[1]
+            if identifier_domain == DOMAIN and identifier_value != "summary":
+                medication_ids.add(identifier_value)
         if medication_ids and medication_ids.isdisjoint(valid_medication_ids):
             device_registry.async_remove_device(device.id)
 
