@@ -83,6 +83,29 @@ function buildOccurrenceKey(targetDate, schedule) {
   return `${year}-${month}-${day}T${hour}:${minute}`;
 }
 
+function getStatusesForDate(row, targetDate) {
+  return (row.schedules || []).map(
+    (schedule) => row.schedule_statuses?.[buildOccurrenceKey(targetDate, schedule)] || "On Track"
+  );
+}
+
+function getRowDisplayStatus(row, targetDate = new Date()) {
+  const statuses = getStatusesForDate(row, targetDate);
+  if (statuses.includes("Missed Dose")) {
+    return "Missed Dose";
+  }
+  if (statuses.includes("Due Now")) {
+    return "Due Now";
+  }
+  if (statuses.includes("Taken")) {
+    return "Taken";
+  }
+  if (row.needs_refill) {
+    return "Needs Refill";
+  }
+  return row.status || "On Track";
+}
+
 function dispatchMoreInfo(target, entityId) {
   target.dispatchEvent(
     new CustomEvent("hass-more-info", {
@@ -252,59 +275,59 @@ class MedicationTrackerCard extends HTMLElement {
     card.innerHTML = `
       <style>
         .wrap {
-          padding: 18px;
+          padding: 12px;
         }
         .header {
           display: flex;
           align-items: center;
           justify-content: space-between;
           gap: 12px;
-          margin-bottom: 16px;
+          margin-bottom: 10px;
         }
         .title {
-          font-size: 1.35rem;
+          font-size: 1.2rem;
           font-weight: 700;
           letter-spacing: -0.02em;
         }
         .summary {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-          gap: 10px;
-          margin-bottom: 18px;
+          grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+          gap: 8px;
+          margin-bottom: 12px;
         }
         .summary.hidden,
         .header.hidden {
           display: none;
         }
         .summary-tile {
-          border-radius: 16px;
-          padding: 12px 14px;
+          border-radius: 14px;
+          padding: 10px 12px;
           background:
             linear-gradient(180deg, rgba(var(--rgb-primary-color), 0.10), rgba(var(--rgb-primary-color), 0.04)),
             var(--ha-card-background, var(--card-background-color));
           border: 1px solid rgba(var(--rgb-primary-color), 0.12);
         }
         .summary-label {
-          font-size: 0.8rem;
+          font-size: 0.72rem;
           opacity: 0.74;
-          margin-bottom: 4px;
+          margin-bottom: 2px;
         }
         .summary-value {
-          font-size: 1.2rem;
+          font-size: 1.05rem;
           font-weight: 700;
         }
         .table {
           display: grid;
-          gap: 10px;
+          gap: 8px;
         }
         .row {
           border: 1px solid var(--divider-color);
-          border-radius: 18px;
-          padding: 14px;
+          border-radius: 16px;
+          padding: 12px;
           background: rgba(var(--rgb-primary-text-color), 0.02);
         }
         .row.compact {
-          padding: 12px;
+          padding: 10px;
         }
         .row-header {
           cursor: pointer;
@@ -314,19 +337,19 @@ class MedicationTrackerCard extends HTMLElement {
           align-items: flex-start;
           justify-content: space-between;
           gap: 12px;
-          margin-bottom: 10px;
+          margin-bottom: 6px;
         }
         .row.compact .row-top {
-          margin-bottom: 8px;
+          margin-bottom: 4px;
         }
         .name {
-          font-size: 1.04rem;
+          font-size: 0.98rem;
           font-weight: 700;
           line-height: 1.2;
         }
         .meta {
           opacity: 0.72;
-          font-size: 0.9rem;
+          font-size: 0.84rem;
           margin-top: 2px;
         }
         .expand-icon {
@@ -338,8 +361,8 @@ class MedicationTrackerCard extends HTMLElement {
           display: inline-flex;
           align-items: center;
           border-radius: 999px;
-          padding: 6px 10px;
-          font-size: 0.75rem;
+          padding: 5px 9px;
+          font-size: 0.7rem;
           font-weight: 700;
           white-space: nowrap;
         }
@@ -365,54 +388,55 @@ class MedicationTrackerCard extends HTMLElement {
         }
         .details {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-          gap: 10px;
-          margin-bottom: 12px;
-        }
-        .row.compact .details {
-          grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
           gap: 8px;
           margin-bottom: 10px;
         }
+        .row.compact .details {
+          grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+          gap: 6px;
+          margin-bottom: 8px;
+        }
         .detail {
           background: rgba(var(--rgb-primary-text-color), 0.03);
-          border-radius: 14px;
-          padding: 10px 12px;
+          border-radius: 12px;
+          padding: 8px 10px;
         }
         .detail-label {
-          font-size: 0.75rem;
+          font-size: 0.7rem;
           opacity: 0.68;
-          margin-bottom: 3px;
+          margin-bottom: 2px;
         }
         .detail-value {
-          font-size: 0.95rem;
+          font-size: 0.84rem;
           font-weight: 600;
         }
         .actions {
           display: flex;
           flex-wrap: wrap;
-          gap: 8px;
+          gap: 6px;
         }
         .row-content.hidden {
           display: none;
         }
         .action {
           border: 0;
-          border-radius: 12px;
-          padding: 10px 12px;
+          border-radius: 10px;
+          padding: 7px 10px;
           font: inherit;
           cursor: pointer;
           background: var(--primary-color);
           color: var(--text-primary-color);
           font-weight: 700;
+          font-size: 0.78rem;
         }
         .action.secondary {
           background: rgba(var(--rgb-primary-text-color), 0.07);
           color: var(--primary-text-color);
         }
         .empty {
-          padding: 14px;
-          border-radius: 16px;
+          padding: 12px;
+          border-radius: 14px;
           background: rgba(var(--rgb-primary-text-color), 0.03);
           opacity: 0.72;
         }
@@ -491,7 +515,8 @@ class MedicationTrackerCard extends HTMLElement {
 
     this._table.innerHTML = visibleRows
       .map((row) => {
-        const statusClass = (row.status || "On Track").toLowerCase().replace(/\s+/g, "-");
+        const displayStatus = getRowDisplayStatus(row);
+        const statusClass = displayStatus.toLowerCase().replace(/\s+/g, "-");
         const details = [];
         const metaParts = [];
         const isExpanded = !this._config.collapsible_rows || this._expandedRows.has(row.medication_id);
@@ -532,7 +557,7 @@ class MedicationTrackerCard extends HTMLElement {
                   </div>
                   ${metaParts.length ? `<div class="meta">${metaParts.join(" | ")}</div>` : ""}
                 </div>
-                ${this._config.show_status_chip ? `<div class="chip ${statusClass}">${row.status}</div>` : ""}
+                ${this._config.show_status_chip ? `<div class="chip ${statusClass}">${displayStatus}</div>` : ""}
               </div>
             </div>
             <div class="row-content ${isExpanded ? "" : "hidden"}">
@@ -645,53 +670,53 @@ class MedicationTrackerWeeklyCard extends HTMLElement {
           display: none;
         }
         .title {
-          font-size: 1.18rem;
+          font-size: 1.08rem;
           font-weight: 700;
           letter-spacing: -0.02em;
         }
         .subtitle {
           opacity: 0.7;
-          font-size: 0.84rem;
+          font-size: 0.78rem;
         }
         .summary {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
-          gap: 8px;
-          margin-bottom: 12px;
+          grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+          gap: 6px;
+          margin-bottom: 10px;
         }
         .summary-tile {
-          border-radius: 12px;
-          padding: 10px;
+          border-radius: 10px;
+          padding: 8px 9px;
           background: rgba(var(--rgb-primary-color), 0.06);
           border: 1px solid rgba(var(--rgb-primary-color), 0.12);
         }
         .summary-label {
-          font-size: 0.74rem;
+          font-size: 0.68rem;
           opacity: 0.72;
-          margin-bottom: 3px;
+          margin-bottom: 2px;
         }
         .summary-value {
-          font-size: 1rem;
+          font-size: 0.96rem;
           font-weight: 700;
         }
         .week-grid {
           display: grid;
-          gap: 10px;
+          gap: 8px;
         }
         .week-grid.horizontal {
           grid-auto-flow: column;
-          grid-auto-columns: minmax(190px, 1fr);
+          grid-auto-columns: minmax(176px, 1fr);
           overflow-x: auto;
           padding-bottom: 2px;
           scroll-snap-type: x proximity;
         }
         .week-grid.vertical {
-          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
         }
         .day-box {
           border: 1px solid var(--divider-color);
-          border-radius: 16px;
-          padding: 12px;
+          border-radius: 14px;
+          padding: 10px;
           background:
             linear-gradient(180deg, rgba(var(--rgb-primary-color), 0.05), rgba(var(--rgb-primary-color), 0.015)),
             rgba(var(--rgb-primary-text-color), 0.015);
@@ -708,89 +733,89 @@ class MedicationTrackerWeeklyCard extends HTMLElement {
           display: flex;
           align-items: baseline;
           justify-content: space-between;
-          gap: 10px;
-          margin-bottom: 10px;
+          gap: 8px;
+          margin-bottom: 8px;
         }
         .day-name {
-          font-size: 0.95rem;
+          font-size: 0.9rem;
           font-weight: 700;
         }
         .day-date {
-          font-size: 0.78rem;
+          font-size: 0.74rem;
           opacity: 0.72;
         }
         .day-count {
-          font-size: 0.76rem;
+          font-size: 0.7rem;
           opacity: 0.72;
         }
         .day-list {
           display: grid;
-          gap: 6px;
+          gap: 5px;
         }
         .pill {
-          border-radius: 14px;
+          border-radius: 12px;
           background: rgba(var(--rgb-primary-text-color), 0.03);
           border: 1px solid rgba(var(--rgb-primary-text-color), 0.06);
           overflow: hidden;
         }
         .pill.compact {
-          border-radius: 12px;
+          border-radius: 10px;
         }
         .pill-head {
           display: flex;
           align-items: flex-start;
           justify-content: space-between;
-          gap: 10px;
-          padding: 9px 10px;
+          gap: 8px;
+          padding: 8px 9px;
           cursor: pointer;
         }
         .pill-name {
           font-weight: 700;
-          font-size: 0.9rem;
+          font-size: 0.84rem;
           line-height: 1.2;
         }
         .pill-meta {
-          font-size: 0.79rem;
+          font-size: 0.74rem;
           opacity: 0.72;
           margin-top: 2px;
         }
         .pill-body {
-          padding: 0 10px 10px;
+          padding: 0 9px 9px;
         }
         .pill-body.hidden {
           display: none;
         }
         .pill-detail {
           display: grid;
-          gap: 4px;
-          margin-bottom: 8px;
+          gap: 3px;
+          margin-bottom: 6px;
         }
         .pill-detail:last-of-type {
-          margin-bottom: 10px;
+          margin-bottom: 8px;
         }
         .pill-detail-label {
-          font-size: 0.72rem;
+          font-size: 0.67rem;
           opacity: 0.68;
         }
         .pill-detail-value {
-          font-size: 0.86rem;
+          font-size: 0.8rem;
           font-weight: 600;
         }
         .actions {
           display: flex;
           flex-wrap: wrap;
-          gap: 6px;
+          gap: 5px;
         }
         .action {
           border: 0;
-          border-radius: 10px;
-          padding: 8px 10px;
+          border-radius: 9px;
+          padding: 6px 9px;
           font: inherit;
           cursor: pointer;
           background: var(--primary-color);
           color: var(--text-primary-color);
           font-weight: 700;
-          font-size: 0.8rem;
+          font-size: 0.74rem;
         }
         .action.secondary {
           background: rgba(var(--rgb-primary-text-color), 0.07);
@@ -800,8 +825,8 @@ class MedicationTrackerWeeklyCard extends HTMLElement {
           display: inline-flex;
           align-items: center;
           border-radius: 999px;
-          padding: 4px 8px;
-          font-size: 0.7rem;
+          padding: 3px 7px;
+          font-size: 0.66rem;
           font-weight: 700;
           white-space: nowrap;
         }
@@ -830,11 +855,11 @@ class MedicationTrackerWeeklyCard extends HTMLElement {
           opacity: 0.7;
         }
         .empty {
-          padding: 10px;
-          border-radius: 12px;
+          padding: 8px;
+          border-radius: 10px;
           background: rgba(var(--rgb-primary-text-color), 0.03);
           opacity: 0.72;
-          font-size: 0.82rem;
+          font-size: 0.76rem;
         }
       </style>
       <div class="wrap">
