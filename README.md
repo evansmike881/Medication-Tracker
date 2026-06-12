@@ -73,9 +73,9 @@ That means less second-guessing, fewer missed steps, and a much better shared vi
 - Bundled starter medication database for common medications
 - Richer medication metadata including purpose, form, instructions, and strength options
 - Daily scheduled doses with one or more times per day
-- Sensors for next dose, last dose, missed doses, days remaining, and compliance percentage
+- Sensors for ownership, next dose, last dose, missed doses, days remaining, and compliance percentage
 - Binary sensors for `due now`, `needs refill`, and `has missed dose`
-- Per-medication `Log Dose` buttons
+- Per-medication `Log Dose` and notification test buttons
 - Due, missed-dose, and refill alerts
 - Optional actionable mobile notifications using a `notify` service
 - Optional caregiver name, caregiver notification target, and caregiver confirmation workflow
@@ -177,6 +177,8 @@ The integration can create persistent notifications and also fire events you can
 If a medication has a `notify_service` configured, Medication Tracker can also send actionable mobile notifications with a `Taken` action button.
 
 If a medication has caregiver confirmation enabled, the integration can also raise caregiver confirmation alerts so household workflows are clearer when someone else is responsible for checking the dose.
+
+Each medication device also exposes button entities you can press from Home Assistant to test due, missed-dose, refill, and caregiver confirmation notifications without waiting for a real schedule event.
 
 An example notification package lives at [examples/packages/medication_tracker_notifications.yaml](//192.168.4.229/html/!HA%20Integrations/Medication%20Tracker/examples/packages/medication_tracker_notifications.yaml).
 

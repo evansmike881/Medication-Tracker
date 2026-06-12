@@ -203,6 +203,7 @@ class MedicationTrackerManager:
             "medication_id": medication.medication_id,
             "profile_id": medication.profile_id,
             "profile_name": medication.profile_name,
+            "belongs_to": medication.profile_name,
             "medication_name": medication.name,
             "dosage": medication.dosage,
             "notes": medication.notes,

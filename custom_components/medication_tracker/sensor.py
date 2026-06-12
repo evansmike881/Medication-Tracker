@@ -20,6 +20,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import slugify
 
 from .const import (
+    ATTR_BELONGS_TO,
     ATTR_DAYS_REMAINING,
     ATTR_CAREGIVER_NAME,
     ATTR_CAREGIVER_CONFIRMATION_NEEDED,
@@ -48,6 +49,10 @@ from .const import (
 )
 
 SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
+    SensorEntityDescription(
+        key=ATTR_BELONGS_TO,
+        name="Belongs To",
+    ),
     SensorEntityDescription(
         key=ATTR_NEXT_DOSE,
         name="Next Dose",

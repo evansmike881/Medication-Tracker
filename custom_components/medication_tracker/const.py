@@ -20,6 +20,7 @@ CONF_MEDICATIONS = "medications"
 
 ATTR_ACTION = "action"
 ATTR_ALERT = "alert"
+ATTR_BELONGS_TO = "belongs_to"
 ATTR_DAYS_REMAINING = "days_remaining"
 ATTR_CAREGIVER_NAME = "caregiver_name"
 ATTR_CAREGIVER_NOTIFY_SERVICE = "caregiver_notify_service"
