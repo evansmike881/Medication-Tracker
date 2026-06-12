@@ -13,8 +13,10 @@ from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import Event, HomeAssistant, ServiceCall
-from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import dt as dt_util
 
@@ -24,7 +26,9 @@ from .const import (
     ATTR_CAREGIVER_NOTIFY_SERVICE,
     ATTR_CONFIRMATION_REQUIRED,
     ATTR_CONFIRMED_BY,
+    ATTR_DUPLICATE_GUARD_MINUTES,
     ATTR_MEDICATION_ID,
+    ATTR_MISSED_AFTER_MINUTES,
     ATTR_NOTIFICATION_ENABLED,
     ATTR_NOTIFY_SERVICE,
     ATTR_NFC_TAG_ID,
@@ -34,13 +38,13 @@ from .const import (
     ATTR_QUANTITY,
     ATTR_REFILL_AT,
     ATTR_REMINDER_MINUTES,
+    ATTR_SCHEDULED_TIME,
     ATTR_SCHEDULES,
     ATTR_SOURCE,
     ATTR_TAKEN_AT,
     ATTR_DATABASE_ENTRY_ID,
     ATTR_FORM,
     ATTR_INSTRUCTIONS,
-    ATTR_MISSED_AFTER_MINUTES,
     ATTR_DOSAGE,
     ATTR_MEDICATION_NAME,
     ATTR_NOTES,
@@ -63,6 +67,45 @@ SERVICE_ADD_MEDICATION = "add_medication"
 SERVICE_LOG_DOSE = "log_dose"
 SERVICE_REFILL_MEDICATION = "refill_medication"
 SERVICE_REMOVE_MEDICATION = "remove_medication"
+SERVICE_SKIP_MEDICATION = "skip_medication"
+SERVICE_SNOOZE_MEDICATION = "snooze_medication"
+
+MEDICATION_SENSOR_UNIQUE_KEYS = (
+    "belongs_to",
+    "next_dose",
+    "last_taken",
+    "missed_doses",
+    "days_remaining",
+    "compliance_percentage",
+    "snoozed_until",
+    "stock_depletion_date",
+)
+MEDICATION_BINARY_SENSOR_UNIQUE_KEYS = (
+    "due_now",
+    "needs_refill",
+    "has_missed_dose",
+    "caregiver_confirmation_needed",
+)
+MEDICATION_BUTTON_UNIQUE_KEYS = (
+    "log_dose",
+    "skip_dose",
+    "snooze_10_minutes",
+    "test_due_notification",
+    "test_missed_notification",
+    "test_refill_notification",
+    "test_caregiver_notification",
+)
+MEDICATION_ENTITY_SUFFIXES = tuple(
+    sorted(
+        {
+            *MEDICATION_SENSOR_UNIQUE_KEYS,
+            *MEDICATION_BINARY_SENSOR_UNIQUE_KEYS,
+            *MEDICATION_BUTTON_UNIQUE_KEYS,
+        },
+        key=len,
+        reverse=True,
+    )
+)
 
 ADD_MEDICATION_SCHEMA = vol.Schema(
     {
@@ -87,6 +130,7 @@ ADD_MEDICATION_SCHEMA = vol.Schema(
         vol.Optional(ATTR_CONFIRMATION_REQUIRED, default=False): cv.boolean,
         vol.Optional(ATTR_REMINDER_MINUTES, default=DEFAULT_REMINDER_MINUTES): vol.Coerce(int),
         vol.Optional(ATTR_MISSED_AFTER_MINUTES, default=DEFAULT_MISSED_AFTER_MINUTES): vol.Coerce(int),
+        vol.Optional(ATTR_DUPLICATE_GUARD_MINUTES, default=0): vol.Coerce(int),
     }
 )
 
@@ -96,6 +140,7 @@ LOG_DOSE_SCHEMA = vol.Schema(
         vol.Optional(ATTR_TAKEN_AT): cv.datetime,
         vol.Optional(ATTR_SOURCE, default="manual"): cv.string,
         vol.Optional(ATTR_CONFIRMED_BY): cv.string,
+        vol.Optional("allow_duplicate", default=False): cv.boolean,
     }
 )
 
@@ -107,6 +152,18 @@ REFILL_MEDICATION_SCHEMA = vol.Schema(
 )
 
 REMOVE_MEDICATION_SCHEMA = vol.Schema({vol.Required(ATTR_MEDICATION_ID): cv.string})
+SNOOZE_MEDICATION_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_MEDICATION_ID): cv.string,
+        vol.Required("minutes"): vol.All(vol.Coerce(int), vol.Range(min=1, max=1440)),
+    }
+)
+SKIP_MEDICATION_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_MEDICATION_ID): cv.string,
+        vol.Optional(ATTR_SCHEDULED_TIME): cv.datetime,
+    }
+)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -128,6 +185,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator": coordinator,
         "alert_engine": alert_engine,
     }
+    _async_prune_orphaned_registry_entries(hass, set(manager.medications))
 
     await async_register_intents(hass)
     await _async_register_services(hass)
@@ -157,6 +215,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_LOG_DOSE,
             SERVICE_REFILL_MEDICATION,
             SERVICE_REMOVE_MEDICATION,
+            SERVICE_SKIP_MEDICATION,
+            SERVICE_SNOOZE_MEDICATION,
         ):
             if hass.services.has_service(DOMAIN, service_name):
                 hass.services.async_remove(DOMAIN, service_name)
@@ -185,6 +245,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             taken_at,
             source=call.data.get(ATTR_SOURCE, "manual"),
             confirmed_by=call.data.get(ATTR_CONFIRMED_BY),
+            allow_duplicate=call.data.get("allow_duplicate", False),
         )
         runtime_data["alert_engine"].dismiss_for_medication(call.data[ATTR_MEDICATION_ID])
         await runtime_data["coordinator"].async_request_refresh()
@@ -199,9 +260,32 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
     async def handle_remove_medication(call: ServiceCall) -> None:
         runtime_data = _get_runtime_data(hass)
-        await runtime_data["manager"].async_remove_medication(call.data[ATTR_MEDICATION_ID])
+        medication_id = call.data[ATTR_MEDICATION_ID]
+        await runtime_data["manager"].async_remove_medication(medication_id)
+        _async_remove_medication_registry_entries(hass, medication_id)
         await runtime_data["coordinator"].async_request_refresh()
         async_dispatcher_send(hass, SIGNAL_MEDICATIONS_UPDATED)
+
+    async def handle_snooze_medication(call: ServiceCall) -> None:
+        runtime_data = _get_runtime_data(hass)
+        await runtime_data["manager"].async_snooze_medication(
+            call.data[ATTR_MEDICATION_ID],
+            call.data["minutes"],
+        )
+        runtime_data["alert_engine"].dismiss_for_medication(call.data[ATTR_MEDICATION_ID])
+        await runtime_data["coordinator"].async_request_refresh()
+
+    async def handle_skip_medication(call: ServiceCall) -> None:
+        runtime_data = _get_runtime_data(hass)
+        scheduled_time = call.data.get(ATTR_SCHEDULED_TIME)
+        if scheduled_time and _is_naive_datetime(scheduled_time):
+            scheduled_time = dt_util.as_local(dt_util.as_utc(scheduled_time))
+        await runtime_data["manager"].async_skip_medication_occurrence(
+            call.data[ATTR_MEDICATION_ID],
+            scheduled_time,
+        )
+        runtime_data["alert_engine"].dismiss_for_medication(call.data[ATTR_MEDICATION_ID])
+        await runtime_data["coordinator"].async_request_refresh()
 
     hass.services.async_register(
         DOMAIN,
@@ -226,6 +310,18 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         SERVICE_REMOVE_MEDICATION,
         handle_remove_medication,
         schema=REMOVE_MEDICATION_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SNOOZE_MEDICATION,
+        handle_snooze_medication,
+        schema=SNOOZE_MEDICATION_SCHEMA,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SKIP_MEDICATION,
+        handle_skip_medication,
+        schema=SKIP_MEDICATION_SCHEMA,
     )
 
 
@@ -294,3 +390,61 @@ async def _async_handle_notification_action(hass: HomeAssistant, event: Event) -
     await runtime_data["manager"].async_log_dose(medication_id, source="mobile_action")
     runtime_data["alert_engine"].dismiss_for_medication(medication_id)
     await runtime_data["coordinator"].async_request_refresh()
+
+
+def _async_remove_medication_registry_entries(hass: HomeAssistant, medication_id: str) -> None:
+    """Remove entity and device registry entries for a deleted medication."""
+    entity_registry = er.async_get(hass)
+
+    for platform_domain, unique_keys in (
+        ("sensor", MEDICATION_SENSOR_UNIQUE_KEYS),
+        ("binary_sensor", MEDICATION_BINARY_SENSOR_UNIQUE_KEYS),
+        ("button", MEDICATION_BUTTON_UNIQUE_KEYS),
+    ):
+        for unique_key in unique_keys:
+            entity_id = entity_registry.async_get_entity_id(
+                platform_domain,
+                DOMAIN,
+                f"{medication_id}_{unique_key}",
+            )
+            if entity_id:
+                entity_registry.async_remove(entity_id)
+
+    device_registry = dr.async_get(hass)
+    device = device_registry.async_get_device(identifiers={(DOMAIN, medication_id)})
+    if device:
+        device_registry.async_remove_device(device.id)
+
+
+def _async_prune_orphaned_registry_entries(hass: HomeAssistant, valid_medication_ids: set[str]) -> None:
+    """Remove stale entity and device registry entries for deleted medications."""
+    entity_registry = er.async_get(hass)
+
+    for entry in list(entity_registry.entities.values()):
+        if entry.platform != DOMAIN or entry.domain not in {"sensor", "binary_sensor", "button"}:
+            continue
+
+        medication_id = _get_medication_id_from_unique_id(entry.unique_id)
+        if medication_id is None or medication_id in valid_medication_ids:
+            continue
+
+        entity_registry.async_remove(entry.entity_id)
+
+    device_registry = dr.async_get(hass)
+    for device in list(device_registry.devices.values()):
+        medication_ids = {
+            identifier_value
+            for identifier_domain, identifier_value in device.identifiers
+            if identifier_domain == DOMAIN and identifier_value != "summary"
+        }
+        if medication_ids and medication_ids.isdisjoint(valid_medication_ids):
+            device_registry.async_remove_device(device.id)
+
+
+def _get_medication_id_from_unique_id(unique_id: str) -> str | None:
+    """Extract a medication ID from a unique ID when it belongs to a medication entity."""
+    for suffix in MEDICATION_ENTITY_SUFFIXES:
+        marker = f"_{suffix}"
+        if unique_id.endswith(marker):
+            return unique_id.removesuffix(marker)
+    return None

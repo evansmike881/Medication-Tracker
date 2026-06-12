@@ -105,7 +105,8 @@
           "instructions": "Instructions",
           "notification_enabled": "Enable reminders",
           "reminder_minutes": "Due reminder window",
-          "missed_after_minutes": "Mark missed after"
+          "missed_after_minutes": "Mark missed after",
+          "duplicate_guard_minutes": "Duplicate-dose protection"
         },
         "data_description": {
           "quantity": "Optional. How many doses or units you currently have left.",
@@ -120,7 +121,8 @@
           "instructions": "Optional. Food timing, handling guidance, or routine notes.",
           "notification_enabled": "Turn scheduled reminders and missed-dose alerts on or off for this medication.",
           "reminder_minutes": "How long after the scheduled time the medication should count as due.",
-          "missed_after_minutes": "How long after the scheduled time to treat the dose as missed."
+          "missed_after_minutes": "How long after the scheduled time to treat the dose as missed.",
+          "duplicate_guard_minutes": "Block accidental repeat logs for this many minutes after the last dose. Set to 0 to disable."
         }
       },
       "edit_medication_select": {
@@ -178,7 +180,8 @@
           "instructions": "Instructions",
           "notification_enabled": "Enable reminders",
           "reminder_minutes": "Due reminder window",
-          "missed_after_minutes": "Mark missed after"
+          "missed_after_minutes": "Mark missed after",
+          "duplicate_guard_minutes": "Duplicate-dose protection"
         },
         "data_description": {
           "quantity": "Optional. How many doses or units you currently have left.",
@@ -193,7 +196,8 @@
           "instructions": "Optional. Food timing, handling guidance, or routine notes.",
           "notification_enabled": "Turn scheduled reminders and missed-dose alerts on or off for this medication.",
           "reminder_minutes": "How long after the scheduled time the medication should count as due.",
-          "missed_after_minutes": "How long after the scheduled time to treat the dose as missed."
+          "missed_after_minutes": "How long after the scheduled time to treat the dose as missed.",
+          "duplicate_guard_minutes": "Block accidental repeat logs for this many minutes after the last dose. Set to 0 to disable."
         }
       },
       "remove_medication_select": {

@@ -97,6 +97,12 @@ add_medication:
         number:
           min: 1
           mode: box
+    duplicate_guard_minutes:
+      required: false
+      selector:
+        number:
+          min: 0
+          mode: box
 log_dose:
   name: Log dose
   description: Record that a scheduled or manual dose has been taken.
@@ -118,6 +124,10 @@ log_dose:
       required: false
       selector:
         text:
+    allow_duplicate:
+      required: false
+      selector:
+        boolean:
 remove_medication:
   name: Remove medication
   description: Remove a medication and its sensors.
@@ -140,3 +150,31 @@ refill_medication:
         number:
           min: 0
           mode: box
+snooze_medication:
+  name: Snooze medication
+  description: Delay reminder notifications for a medication for a set number of minutes.
+  fields:
+    medication_id:
+      required: true
+      selector:
+        text:
+    minutes:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 1440
+          mode: box
+skip_medication:
+  name: Skip medication occurrence
+  description: Mark the next or specified scheduled occurrence as intentionally skipped or held.
+  fields:
+    medication_id:
+      required: true
+      selector:
+        text:
+    scheduled_time:
+      required: false
+      example: "2026-06-12T20:00:00+01:00"
+      selector:
+        text:

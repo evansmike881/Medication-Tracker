@@ -75,8 +75,12 @@ That means less second-guessing, fewer missed steps, and a much better shared vi
 - Daily scheduled doses with one or more times per day
 - Sensors for ownership, next dose, last dose, missed doses, days remaining, and compliance percentage
 - Binary sensors for `due now`, `needs refill`, and `has missed dose`
-- Per-medication `Log Dose` and notification test buttons
+- Per-medication `Log Dose`, `Skip Dose`, `Snooze`, and notification test buttons
 - Due, missed-dose, and refill alerts
+- Smart grouped notifications for due, missed, refill, and caregiver alerts when multiple medications belong together
+- Duplicate-dose protection with optional override for supervised/manual corrections
+- Stock forecasting with projected depletion dates
+- Real Home Assistant calendar entity support for scheduled medications
 - Optional actionable mobile notifications using a `notify` service
 - Optional caregiver name, caregiver notification target, and caregiver confirmation workflow
 - NFC tag confirmation through Home Assistant `tag_scanned` events
@@ -114,6 +118,10 @@ The flow is designed to be friendly:
 A starter dashboard example lives at [examples/lovelace/medication_tracker_dashboard.yaml](//192.168.4.229/html/!HA%20Integrations/Medication%20Tracker/examples/lovelace/medication_tracker_dashboard.yaml).
 
 A dedicated registry-style dashboard example lives at [examples/lovelace/medication_registry_dashboard.yaml](//192.168.4.229/html/!HA%20Integrations/Medication%20Tracker/examples/lovelace/medication_registry_dashboard.yaml).
+
+A calendar-style schedule example now also lives at [examples/lovelace/medication_calendar_dashboard.yaml](//192.168.4.229/html/!HA%20Integrations/Medication%20Tracker/examples/lovelace/medication_calendar_dashboard.yaml).
+
+The integration also now exposes a real Home Assistant calendar entity that can be added to Calendar dashboards and used in calendar automations.
 
 There is also a custom Lovelace card served by the integration:
 
@@ -174,7 +182,9 @@ The integration can create persistent notifications and also fire events you can
 - `medication_tracker_refill_needed`
 - `medication_tracker_nfc_logged`
 
-If a medication has a `notify_service` configured, Medication Tracker can also send actionable mobile notifications with a `Taken` action button.
+If a medication has a `notify_service` configured, Medication Tracker can also send actionable mobile notifications with `Taken` action buttons.
+
+When more than one medication matches the same person or pet and notification target, the integration now combines related due, missed-dose, refill, and caregiver alerts into one structured notification with a medication list instead of sending one separate alert per medication.
 
 If a medication has caregiver confirmation enabled, the integration can also raise caregiver confirmation alerts so household workflows are clearer when someone else is responsible for checking the dose.
 
@@ -202,6 +212,8 @@ The UI is the preferred way to manage medications, but services are still availa
 - `medication_tracker.log_dose`
 - `medication_tracker.refill_medication`
 - `medication_tracker.remove_medication`
+- `medication_tracker.snooze_medication`
+- `medication_tracker.skip_medication`
 
 ## Where this is heading
 

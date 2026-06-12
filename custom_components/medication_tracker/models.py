@@ -59,10 +59,13 @@ class Medication:
     confirmation_required: bool = False
     reminder_minutes: int = 15
     missed_after_minutes: int = 60
+    duplicate_guard_minutes: int = 0
     last_due_notification: str | None = None
     last_missed_notification: str | None = None
     last_refill_notification: str | None = None
     last_caregiver_notification: str | None = None
+    snoozed_until: str | None = None
+    skipped_occurrences: list[str] = field(default_factory=list)
     start_date: date = field(default_factory=date.today)
     dose_logs: list[DoseLog] = field(default_factory=list)
 
@@ -91,10 +94,13 @@ class Medication:
             "confirmation_required": self.confirmation_required,
             "reminder_minutes": self.reminder_minutes,
             "missed_after_minutes": self.missed_after_minutes,
+            "duplicate_guard_minutes": self.duplicate_guard_minutes,
             "last_due_notification": self.last_due_notification,
             "last_missed_notification": self.last_missed_notification,
             "last_refill_notification": self.last_refill_notification,
             "last_caregiver_notification": self.last_caregiver_notification,
+            "snoozed_until": self.snoozed_until,
+            "skipped_occurrences": self.skipped_occurrences,
             "start_date": self.start_date.isoformat(),
             "dose_logs": [dose_log.as_dict() for dose_log in self.dose_logs],
         }
@@ -125,10 +131,13 @@ class Medication:
             confirmation_required=data.get("confirmation_required", False),
             reminder_minutes=data.get("reminder_minutes", 15),
             missed_after_minutes=data.get("missed_after_minutes", 60),
+            duplicate_guard_minutes=data.get("duplicate_guard_minutes", 0),
             last_due_notification=data.get("last_due_notification"),
             last_missed_notification=data.get("last_missed_notification"),
             last_refill_notification=data.get("last_refill_notification"),
             last_caregiver_notification=data.get("last_caregiver_notification"),
+            snoozed_until=data.get("snoozed_until"),
+            skipped_occurrences=list(data.get("skipped_occurrences", [])),
             start_date=date.fromisoformat(data["start_date"]),
             dose_logs=[DoseLog.from_dict(item) for item in data.get("dose_logs", [])],
         )

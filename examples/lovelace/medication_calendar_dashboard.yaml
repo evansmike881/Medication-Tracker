@@ -1,54 +1,26 @@
-title: Medication Tracker
+title: Medication Calendar
 views:
-  - title: Overview
-    path: medication-tracker
-    cards:
-      - type: heading
-        heading: Medication Tracker
-      - type: grid
-        columns: 2
-        square: false
-        cards:
-          - type: tile
-            entity: sensor.medication_tracker_medication_count
-            name: Active medications
-          - type: tile
-            entity: sensor.medication_tracker_due_now_count
-            name: Due now
-          - type: tile
-            entity: sensor.medication_tracker_missed_dose_count
-            name: Missed doses
-          - type: tile
-            entity: sensor.medication_tracker_refill_needed_count
-            name: Refills needed
-      - type: entities
-        title: Summary
-        entities:
-          - entity: sensor.medication_tracker_next_due
-            name: Next household dose
-          - entity: sensor.medication_tracker_due_now_count
-          - entity: sensor.medication_tracker_missed_dose_count
-          - entity: sensor.medication_tracker_refill_needed_count
-      - type: markdown
-        content: |
-          Add per-medication entities with the UI by selecting entities from the Medication Tracker devices.
-          Useful entity types include:
-          - `button.<medication>_log_dose`
-          - `button.<medication>_skip_dose`
-          - `button.<medication>_snooze_10_minutes`
-          - `button.<medication>_test_due_notification`
-          - `sensor.<medication>_next_dose`
-          - `sensor.<medication>_belongs_to`
-          - `sensor.<medication>_stock_depletion`
-          - `sensor.<medication>_snoozed_until`
-          - `sensor.<medication>_last_dose`
-          - `binary_sensor.<medication>_due_now`
-          - `binary_sensor.<medication>_needs_refill`
   - title: Calendar
     path: medication-calendar
     cards:
       - type: heading
         heading: Medication Calendar
+      - type: grid
+        columns: 4
+        square: false
+        cards:
+          - type: tile
+            entity: sensor.medication_tracker_medication_count
+            name: Medications
+          - type: tile
+            entity: sensor.medication_tracker_tracked_profiles
+            name: People and pets
+          - type: tile
+            entity: sensor.medication_tracker_due_now_count
+            name: Due now
+          - type: tile
+            entity: sensor.medication_tracker_next_due
+            name: Next dose
       - type: custom:medication-tracker-weekly-card
         entity: sensor.medication_tracker_medication_registry
         title: Weekly Pill Box
@@ -100,3 +72,13 @@ views:
 
           {% endfor %}
           {% endif %}
+      - type: markdown
+        title: Per-Medication Entities
+        content: |
+          Useful companion entities for calendar-style dashboards:
+          - `sensor.<medication>_belongs_to`
+          - `sensor.<medication>_next_dose`
+          - `sensor.<medication>_last_dose`
+          - `button.<medication>_log_dose`
+          - `button.<medication>_test_due_notification`
+          - `binary_sensor.<medication>_due_now`

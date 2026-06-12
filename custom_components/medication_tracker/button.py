@@ -20,6 +20,16 @@ BUTTON_TYPES: tuple[ButtonEntityDescription, ...] = (
         icon="mdi:pill",
     ),
     ButtonEntityDescription(
+        key="skip_dose",
+        name="Skip Dose",
+        icon="mdi:skip-next-circle-outline",
+    ),
+    ButtonEntityDescription(
+        key="snooze_10_minutes",
+        name="Snooze 10 Minutes",
+        icon="mdi:timer-sand",
+    ),
+    ButtonEntityDescription(
         key="test_due_notification",
         name="Test Due Notification",
         icon="mdi:bell-ring-outline",
@@ -122,6 +132,12 @@ class MedicationActionButton(CoordinatorEntity, ButtonEntity):
         """Run the configured medication action."""
         if self.entity_description.key == "log_dose":
             await self._manager.async_log_dose(self._medication_id)
+            self._alert_engine.dismiss_for_medication(self._medication_id)
+        elif self.entity_description.key == "skip_dose":
+            await self._manager.async_skip_medication_occurrence(self._medication_id)
+            self._alert_engine.dismiss_for_medication(self._medication_id)
+        elif self.entity_description.key == "snooze_10_minutes":
+            await self._manager.async_snooze_medication(self._medication_id, 10)
             self._alert_engine.dismiss_for_medication(self._medication_id)
         elif self.entity_description.key == "test_due_notification":
             await self._alert_engine.async_send_test_alert(self._medication_id, "due")

@@ -16,6 +16,7 @@ from .const import (
     ATTR_CONFIRMATION_REQUIRED,
     ATTR_DATABASE_ENTRY_ID,
     ATTR_DOSAGE,
+    ATTR_DUPLICATE_GUARD_MINUTES,
     ATTR_FORM,
     ATTR_INSTRUCTIONS,
     ATTR_MEDICATION_NAME,
@@ -307,6 +308,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
                 missed_after_minutes=int(
                     self._draft.get(ATTR_MISSED_AFTER_MINUTES, DEFAULT_MISSED_AFTER_MINUTES)
                 ),
+                duplicate_guard_minutes=int(self._draft.get(ATTR_DUPLICATE_GUARD_MINUTES, 0)),
             )
             await self._runtime["coordinator"].async_request_refresh()
             async_dispatcher_send(self.hass, SIGNAL_MEDICATIONS_UPDATED)
@@ -352,6 +354,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
                 ATTR_NOTIFICATION_ENABLED: medication.notification_enabled,
                 ATTR_REMINDER_MINUTES: medication.reminder_minutes,
                 ATTR_MISSED_AFTER_MINUTES: medication.missed_after_minutes,
+                ATTR_DUPLICATE_GUARD_MINUTES: medication.duplicate_guard_minutes,
             }
             return await self.async_step_edit_medication_basic()
 
@@ -491,6 +494,9 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
                 missed_after_minutes=int(
                     self._draft.get(ATTR_MISSED_AFTER_MINUTES, medication.missed_after_minutes)
                 ),
+                duplicate_guard_minutes=int(
+                    self._draft.get(ATTR_DUPLICATE_GUARD_MINUTES, medication.duplicate_guard_minutes)
+                ),
             )
             await self._runtime["coordinator"].async_request_refresh()
             async_dispatcher_send(self.hass, SIGNAL_MEDICATIONS_UPDATED)
@@ -516,6 +522,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
                 missed_after_minutes=self._draft.get(
                     ATTR_MISSED_AFTER_MINUTES, DEFAULT_MISSED_AFTER_MINUTES
                 ),
+                duplicate_guard_minutes=self._draft.get(ATTR_DUPLICATE_GUARD_MINUTES, 0),
             ),
         )
 
@@ -577,6 +584,7 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
         notification_enabled=True,
         reminder_minutes=DEFAULT_REMINDER_MINUTES,
         missed_after_minutes=DEFAULT_MISSED_AFTER_MINUTES,
+        duplicate_guard_minutes=0,
     ):
         """Build the advanced settings form."""
         return vol.Schema(
@@ -617,6 +625,14 @@ class MedicationTrackerOptionsFlow(config_entries.OptionsFlow):
                 vol.Required(ATTR_MISSED_AFTER_MINUTES, default=missed_after_minutes): selector.NumberSelector(
                     selector.NumberSelectorConfig(
                         min=1,
+                        max=1440,
+                        step=1,
+                        mode=selector.NumberSelectorMode.BOX,
+                    )
+                ),
+                vol.Required(ATTR_DUPLICATE_GUARD_MINUTES, default=duplicate_guard_minutes): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0,
                         max=1440,
                         step=1,
                         mode=selector.NumberSelectorMode.BOX,

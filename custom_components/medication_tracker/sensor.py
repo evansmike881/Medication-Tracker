@@ -27,6 +27,8 @@ from .const import (
     ATTR_CONFIRMATION_REQUIRED,
     ATTR_DOSE_COUNT,
     ATTR_DOSAGE,
+    ATTR_DUPLICATE_DOSE_WARNING,
+    ATTR_DUPLICATE_GUARD_MINUTES,
     ATTR_ENTITY_BASE,
     ATTR_FORM,
     ATTR_INSTRUCTIONS,
@@ -43,6 +45,10 @@ from .const import (
     ATTR_REFILL_AT,
     ATTR_REMAINING_QUANTITY,
     ATTR_SCHEDULES,
+    ATTR_SKIPPED_OCCURRENCES,
+    ATTR_SNOOZED_UNTIL,
+    ATTR_STOCK_DEPLETION_DATE,
+    ATTR_STOCK_STATUS,
     ATTR_STRENGTH_OPTIONS,
     DOMAIN,
     SIGNAL_MEDICATIONS_UPDATED,
@@ -61,6 +67,16 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
     SensorEntityDescription(
         key=ATTR_LAST_TAKEN,
         name="Last Dose",
+        device_class=SensorDeviceClass.TIMESTAMP,
+    ),
+    SensorEntityDescription(
+        key=ATTR_SNOOZED_UNTIL,
+        name="Snoozed Until",
+        device_class=SensorDeviceClass.TIMESTAMP,
+    ),
+    SensorEntityDescription(
+        key=ATTR_STOCK_DEPLETION_DATE,
+        name="Stock Depletion",
         device_class=SensorDeviceClass.TIMESTAMP,
     ),
     SensorEntityDescription(
@@ -241,7 +257,12 @@ class MedicationSensor(CoordinatorEntity, SensorEntity):
             ATTR_CAREGIVER_NAME: snapshot[ATTR_CAREGIVER_NAME],
             ATTR_CONFIRMATION_REQUIRED: snapshot[ATTR_CONFIRMATION_REQUIRED],
             ATTR_CAREGIVER_CONFIRMATION_NEEDED: snapshot[ATTR_CAREGIVER_CONFIRMATION_NEEDED],
+            ATTR_DUPLICATE_GUARD_MINUTES: snapshot[ATTR_DUPLICATE_GUARD_MINUTES],
+            ATTR_DUPLICATE_DOSE_WARNING: snapshot[ATTR_DUPLICATE_DOSE_WARNING],
             ATTR_LAST_CONFIRMED_BY: snapshot[ATTR_LAST_CONFIRMED_BY],
+            ATTR_SNOOZED_UNTIL: snapshot[ATTR_SNOOZED_UNTIL],
+            ATTR_SKIPPED_OCCURRENCES: snapshot[ATTR_SKIPPED_OCCURRENCES],
+            ATTR_STOCK_STATUS: snapshot[ATTR_STOCK_STATUS],
             ATTR_NOTES: snapshot[ATTR_NOTES],
         }
 

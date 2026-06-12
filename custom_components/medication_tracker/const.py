@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "medication_tracker"
-PLATFORMS = ["binary_sensor", "button", "sensor"]
+PLATFORMS = ["binary_sensor", "button", "calendar", "sensor"]
 STORAGE_KEY = DOMAIN
 STORAGE_VERSION = 1
 SIGNAL_MEDICATIONS_UPDATED = f"{DOMAIN}_medications_updated"
@@ -27,6 +27,8 @@ ATTR_CAREGIVER_NOTIFY_SERVICE = "caregiver_notify_service"
 ATTR_CAREGIVER_CONFIRMATION_NEEDED = "caregiver_confirmation_needed"
 ATTR_CONFIRMATION_REQUIRED = "confirmation_required"
 ATTR_CONFIRMED_BY = "confirmed_by"
+ATTR_DUPLICATE_GUARD_MINUTES = "duplicate_guard_minutes"
+ATTR_DUPLICATE_DOSE_WARNING = "duplicate_dose_warning"
 ATTR_FORM = "form"
 ATTR_DOSE_COUNT = "dose_count"
 ATTR_DOSAGE = "dosage"
@@ -36,6 +38,7 @@ ATTR_INSTRUCTIONS = "instructions"
 ATTR_LAST_TAKEN = "last_taken"
 ATTR_LAST_CONFIRMED_BY = "last_confirmed_by"
 ATTR_MEDICATION_ID = "medication_id"
+ATTR_MEDICATION_IDS = "medication_ids"
 ATTR_MEDICATION_NAME = "medication_name"
 ATTR_MISSED_DOSES = "missed_doses"
 ATTR_NEXT_DOSE = "next_dose"
@@ -60,6 +63,10 @@ ATTR_DATABASE_ENTRY_ID = "database_entry_id"
 ATTR_MISSED_AFTER_MINUTES = "missed_after_minutes"
 ATTR_NOTIFICATION_MESSAGE = "notification_message"
 ATTR_SCHEDULED_TIME = "scheduled_time"
+ATTR_SKIPPED_OCCURRENCES = "skipped_occurrences"
+ATTR_SNOOZED_UNTIL = "snoozed_until"
+ATTR_STOCK_DEPLETION_DATE = "stock_depletion_date"
+ATTR_STOCK_STATUS = "stock_status"
 
 DEFAULT_SCAN_INTERVAL_MINUTES = 1
 DEFAULT_REMINDER_MINUTES = 15
