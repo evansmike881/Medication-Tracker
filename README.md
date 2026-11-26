@@ -103,6 +103,20 @@ If you take a handful of prescriptions plus a pile of vitamins and minerals, you
 
 Quickest way to set up: **Medications -> Quick add several**, pick the person, choose "A new group", give it a name and a time, and type one medication per line (`Vitamin D, 1000 IU`). Then drag things around.
 
+## Everyday conveniences (0.6)
+
+- **Collapse groups** on the Medications tab (and use Collapse / Expand groups for the lot), so a long list stays short. On Today, groups that need attention are open and finished or upcoming ones fold away; tap to open any of them. Your choices are remembered on that device.
+- **Search** the Medications tab by name, dose or purpose.
+- **Tick items one by one from your phone**: tapping a reminder opens the panel on Today, where the group that needs you is open as a checklist.
+- **Bigger buttons** for tablets and touch screens: press **Aa +** at the top (it switches on by itself on tablets).
+- **Pause reminders** (holiday or illness mode) from the Today tab: for everyone or one person, with start and end dates. Nothing is reminded and nothing counts as missed on those days.
+- **Each person's own phone**: Settings -> People and weekly summary. Order of precedence: the medication's or group's phone, then the person's phone, then the default.
+- **Weekly summary**: a notification on the day you choose (09:00) with last week's adherence per person, what was missed and what's running low.
+- **Food and timing**: mark a medication "with food" or "on an empty stomach" (shown in reminders and on Today), and say what it must be kept apart from, for example iron and calcium. You get a warning if their times are too close and if you take them too close together.
+- **Low-stock reminders** already arrive as one notification per person; they now include roughly how many days are left, and the Today tab has an **Add stock** button on each low item.
+- **Backup and restore**: Settings -> Backup downloads everything as a file and restores it later. A copy is also written automatically every day to `medication_tracker_backups` in your config folder (the last 14 are kept), and restoring first saves a safety copy of what it replaces.
+- **Copy** a medication to start a new one from it, **starting-point lists** in Quick add, and **Print report** on the History tab for a doctor's appointment (use Print -> Save as PDF).
+
 ## Installation
 
 1. Add this repository as a custom repository in HACS / the Home Assistant Marketplace (type: Integration).
@@ -294,6 +308,7 @@ The UI is the preferred way to manage medications, but services are still availa
 - `medication_tracker.log_dose`
 - `medication_tracker.log_all_due` (optionally `profile_id`, `group_id` or `medication_ids`)
 - `medication_tracker.add_group`, `medication_tracker.remove_group`, `medication_tracker.set_medication_group`
+- `medication_tracker.pause_reminders` (`end_date`, optional `start_date` and `profile_id`) and `medication_tracker.resume_reminders`
 - `medication_tracker.delete_dose`
 - `medication_tracker.reset_history`
 - `medication_tracker.update_settings`

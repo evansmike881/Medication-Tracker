@@ -25,9 +25,12 @@ from .const import (
     SETTING_DEFAULT_NOTIFY,
     SETTING_ESCALATION_NOTIFY,
     SETTING_FALLBACK_NOTIFY,
+    SETTING_PROFILE_NOTIFY,
     SETTING_PROFILE_TAGS,
     SETTING_QUIET_END,
     SETTING_QUIET_START,
+    SETTING_WEEKLY_DAY,
+    SETTING_WEEKLY_SERVICE,
     VERSION,
 )
 from .runtime import (
@@ -75,6 +78,7 @@ def _build_state(hass: HomeAssistant) -> dict[str, Any]:
         "today": manager.get_today_doses(),
         "as_needed": manager.get_as_needed(),
         "groups": manager.get_groups_view(),
+        "pauses": manager.get_pauses_view(),
         "recent_logs": manager.get_recent_logs(60),
         "settings": manager.settings,
         "summary": manager.get_summary(),
@@ -133,7 +137,7 @@ async def ws_take(hass, connection, msg):
         taken_at=_parse_taken_at(msg.get("taken_at")),
         taken_by=_user_name(connection),
     )
-    return {"ok": True}
+    return {"ok": True, "warnings": get_runtime(hass)["manager"].keep_apart_warnings(msg["medication_id"])}
 
 
 @websocket_api.websocket_command(
@@ -256,6 +260,9 @@ async def ws_refill(hass, connection, msg):
         vol.Optional("anchor_date"): vol.Any(None, str),
         vol.Optional("escalate_after_minutes", default=0): vol.All(int, vol.Range(min=0, max=1440)),
         vol.Optional("group_id"): vol.Any(None, str),
+        vol.Optional("food_note"): vol.In(["", "with_food", "empty_stomach"]),
+        vol.Optional("keep_apart"): [str],
+        vol.Optional("keep_apart_minutes"): vol.All(int, vol.Range(min=15, max=720)),
     }
 )
 @websocket_api.require_admin
@@ -489,6 +496,9 @@ async def ws_reset_history(hass, connection, msg):
         vol.Optional(SETTING_ANNOUNCE_HOME_ENTITY): vol.Any(None, str),
         vol.Optional(SETTING_QUIET_START): vol.Any(None, str),
         vol.Optional(SETTING_QUIET_END): vol.Any(None, str),
+        vol.Optional(SETTING_PROFILE_NOTIFY): {str: str},
+        vol.Optional(SETTING_WEEKLY_SERVICE): vol.Any(None, str),
+        vol.Optional(SETTING_WEEKLY_DAY): vol.All(int, vol.Range(min=0, max=6)),
     }
 )
 @websocket_api.require_admin
@@ -520,6 +530,59 @@ async def ws_test_notification(hass, connection, msg):
     return {"delivered": delivered}
 
 
+@websocket_api.websocket_command({vol.Required("type"): PREFIX + "export_data"})
+@websocket_api.require_admin
+@websocket_api.async_response
+@_handler
+async def ws_export_data(hass, connection, msg):
+    """Return a full backup for the panel to download."""
+    return get_runtime(hass)["manager"].export_data()
+
+
+@websocket_api.websocket_command({vol.Required("type"): PREFIX + "import_data", vol.Required("data"): dict})
+@websocket_api.require_admin
+@websocket_api.async_response
+@_handler
+async def ws_import_data(hass, connection, msg):
+    """Replace everything with a backup file's contents."""
+    counts = await get_runtime(hass)["manager"].async_import_data(msg["data"])
+    await async_refresh(hass)
+    return counts
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): PREFIX + "add_pause",
+        vol.Optional("profile_id"): vol.Any(None, str),
+        vol.Optional("start"): vol.Any(None, str),
+        vol.Required("end"): str,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+@_handler
+async def ws_add_pause(hass, connection, msg):
+    """Pause reminders (holiday mode)."""
+    await get_runtime(hass)["manager"].async_add_pause(
+        profile_id=msg.get("profile_id"), start=msg.get("start"), end=msg["end"]
+    )
+    await async_refresh(hass)
+    return {"ok": True}
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): PREFIX + "remove_pause", vol.Required("index"): vol.All(int, vol.Range(min=0))}
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+@_handler
+async def ws_remove_pause(hass, connection, msg):
+    """End a pause early."""
+    await get_runtime(hass)["manager"].async_remove_pause(index=msg["index"])
+    await async_refresh(hass)
+    return {"ok": True}
+
+
 @callback
 def async_register_commands(hass: HomeAssistant) -> None:
     """Register all websocket commands."""
@@ -542,6 +605,10 @@ def async_register_commands(hass: HomeAssistant) -> None:
         ws_delete_dose,
         ws_reset_history,
         ws_save_settings,
+        ws_export_data,
+        ws_import_data,
+        ws_add_pause,
+        ws_remove_pause,
         ws_test_notification,
     ):
         websocket_api.async_register_command(hass, command)

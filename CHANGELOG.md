@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.0
+
+### Added
+- **Collapsible groups** on the Medications tab (Collapse / Expand groups buttons) and on Today, where finished and upcoming groups fold away and the one that needs you is open as a checklist. Remembered per device.
+- **Search** on the Medications tab.
+- **Pause reminders** (holiday mode) for everyone or one person; paused days send nothing and never count as missed. Services `pause_reminders` and `resume_reminders`.
+- **Per-person reminder phone** and a **weekly summary** notification (Settings -> People and weekly summary).
+- **Food notes** (with food, on an empty stomach) and **keep apart from** (for example iron and calcium) with warnings in the panel and when doses are taken too close together.
+- **Backup and restore** from Settings, plus an automatic daily backup file (last 14 kept) and a safety copy before any restore.
+- **Large-buttons mode** for tablets and touch screens.
+- **Print report** for appointments, **Copy medication**, starting-point lists in Quick add, **Add stock** buttons on the low-stock banner, folded-group drop targets, and a clear message when a medication is dropped on another person's group.
+- Low-stock notifications now say about how many days are left.
+
+### Changed
+- Reminders and announcements now fall back person phone, then default phone, when a medication or group has none of its own.
+
+### Upgrading
+Nothing to migrate: 0.5.x data loads unchanged and the new settings start switched off. Restart Home Assistant and hard refresh the browser (Ctrl+Shift+R).
+
 ## 0.5.0
 
 ### Added

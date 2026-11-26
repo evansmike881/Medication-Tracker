@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "medication_tracker"
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 PLATFORMS = ["binary_sensor", "button", "calendar", "sensor"]
 STORAGE_KEY = DOMAIN
 STORAGE_VERSION = 1
@@ -137,6 +137,15 @@ SETTING_ANNOUNCE_SERVICE = "announce_service"
 SETTING_ANNOUNCE_HOME_ENTITY = "announce_only_when_home_entity"
 SETTING_QUIET_START = "quiet_hours_start"
 SETTING_QUIET_END = "quiet_hours_end"
+SETTING_PROFILE_NOTIFY = "profile_notify_services"
+SETTING_PAUSES = "pauses"
+SETTING_WEEKLY_SERVICE = "weekly_summary_service"
+SETTING_WEEKLY_DAY = "weekly_summary_day"
+SETTING_LAST_WEEKLY = "last_weekly_summary"
+BACKUP_FORMAT = "medication_tracker_backup"
+BACKUP_DIR = "medication_tracker_backups"
+BACKUP_KEEP = 14
+FOOD_NOTES = {"with_food": "take with food", "empty_stomach": "on an empty stomach"}
 
 # Limits
 HISTORY_WINDOW_DAYS = 365  # how far back doses are matched against the schedule
@@ -153,4 +162,9 @@ DEFAULT_SETTINGS = {
     SETTING_ANNOUNCE_HOME_ENTITY: None,
     SETTING_QUIET_START: None,
     SETTING_QUIET_END: None,
+    SETTING_PROFILE_NOTIFY: {},
+    SETTING_PAUSES: [],
+    SETTING_WEEKLY_SERVICE: None,
+    SETTING_WEEKLY_DAY: 6,
+    SETTING_LAST_WEEKLY: None,
 }

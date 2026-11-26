@@ -120,6 +120,8 @@ SERVICE_UPDATE_SETTINGS = "update_settings"
 SERVICE_UNDO_LAST_DOSE = "undo_last_dose"
 SERVICE_ADD_GROUP = "add_group"
 SERVICE_REMOVE_GROUP = "remove_group"
+SERVICE_PAUSE = "pause_reminders"
+SERVICE_RESUME = "resume_reminders"
 SERVICE_SET_MEDICATION_GROUP = "set_medication_group"
 SERVICE_NAMES = (
     SERVICE_ADD_MEDICATION,
@@ -136,6 +138,8 @@ SERVICE_NAMES = (
     SERVICE_ADD_GROUP,
     SERVICE_REMOVE_GROUP,
     SERVICE_SET_MEDICATION_GROUP,
+    SERVICE_PAUSE,
+    SERVICE_RESUME,
 )
 
 MEDICATION_ENTITY_SUFFIXES = tuple(
@@ -206,6 +210,14 @@ ADD_GROUP_SCHEMA = vol.Schema(
     }
 )
 REMOVE_GROUP_SCHEMA = vol.Schema({vol.Required(ATTR_GROUP_ID): cv.string})
+PAUSE_SCHEMA = vol.Schema(
+    {
+        vol.Required("end_date"): cv.string,
+        vol.Optional("start_date"): cv.string,
+        vol.Optional("profile_id"): cv.string,
+    }
+)
+RESUME_SCHEMA = vol.Schema({vol.Optional("profile_id"): cv.string})
 SET_MEDICATION_GROUP_SCHEMA = vol.Schema(
     {
         vol.Required(ATTR_MEDICATION_ID): cv.string,
@@ -398,6 +410,16 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         )
         await async_refresh(hass)
 
+    async def handle_pause(call: ServiceCall) -> None:
+        await get_runtime(hass)["manager"].async_add_pause(
+            end=call.data["end_date"], start=call.data.get("start_date"), profile_id=call.data.get("profile_id")
+        )
+        await async_refresh(hass)
+
+    async def handle_resume(call: ServiceCall) -> None:
+        await get_runtime(hass)["manager"].async_remove_pause(profile_id=call.data.get("profile_id"))
+        await async_refresh(hass)
+
     async def handle_undo_last_dose(call: ServiceCall) -> None:
         await async_undo_last(hass, call.data[ATTR_MEDICATION_ID])
 
@@ -455,6 +477,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         (SERVICE_UNDO_LAST_DOSE, handle_undo_last_dose, UNDO_LAST_DOSE_SCHEMA),
         (SERVICE_ADD_GROUP, handle_add_group, ADD_GROUP_SCHEMA),
         (SERVICE_REMOVE_GROUP, handle_remove_group, REMOVE_GROUP_SCHEMA),
+        (SERVICE_PAUSE, handle_pause, PAUSE_SCHEMA),
+        (SERVICE_RESUME, handle_resume, RESUME_SCHEMA),
         (SERVICE_SET_MEDICATION_GROUP, handle_set_medication_group, SET_MEDICATION_GROUP_SCHEMA),
     ):
         hass.services.async_register(DOMAIN, name, handler, schema=schema)
