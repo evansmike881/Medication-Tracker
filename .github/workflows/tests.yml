@@ -1,0 +1,23 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install pytest
+      - name: Unit tests (logic runs against small Home Assistant fakes)
+        run: python -m pytest tests -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check front-end files parse
+        run: |
+          for f in custom_components/medication_tracker/frontend/*.js; do node --check "$f"; done

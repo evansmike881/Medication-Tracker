@@ -93,14 +93,47 @@ That means less second-guessing, fewer missed steps, and a much better shared vi
 
 ## Installation
 
-1. Add this repository as a custom repository in HACS.
+1. Add this repository as a custom repository in HACS / the Home Assistant Marketplace (type: Integration).
 2. Install `Medication Tracker`.
 3. Restart Home Assistant.
 4. Add the integration from `Settings -> Devices & services`.
+5. Open the new **Medications** item in the sidebar, go to **Settings**, and pick the phone that should get reminders.
 
-## Managing medications
+## The Medications panel
 
-The preferred admin flow is built into Home Assistant:
+Medication Tracker adds a **Medications** page to the Home Assistant sidebar. It is the easiest way to use the integration day to day:
+
+- **Today** - everything scheduled today with its status. Press **Take all due** to mark everything that is due as taken, **All taken for <person>** for one person, or Taken / Snooze / Skip on a single medication.
+- **Medications** - add, edit, delete and top up stock. Pick times with time pickers, choose which days of the week, set how many doses you have left, and bind an NFC tag (press **Scan** and tap the tag with your phone).
+- **History** - recent doses, with the option to delete one that was logged by mistake.
+- **Settings** - default phone for reminders, a backup phone, and NFC tags that mark everything (or one person's medications) as taken.
+
+Anyone can mark doses taken from the panel. Editing medications and settings is limited to Home Assistant administrators.
+
+## More things it can do
+
+- **Loud reminders** - due, missed and escalated doses use Android's alarm channel at high priority and stay on screen until you act (Settings -> Reminders to turn off).
+- **Spoken reminders** - choose a notify service that speaks, such as an Alexa Media `notify.alexa_media_*` service. Optionally only when a person is home, and never during quiet hours.
+- **Escalation** - on a medication's edit page, set "Tell caregiver if not taken after (min)". If the dose is still outstanding, the caregiver's phone (or the default escalation phone in Settings) gets a notification with Mark taken / Skip.
+- **Quiet hours** - silence announcements and refill reminders overnight. Dose reminders to your phone are never silenced.
+- **As-needed medication** - tick "As needed" for things like paracetamol. Set a daily limit and use "Block double-logging for" for the minimum gap between doses.
+- **Courses** - set "Course ends" and the medication stops reminding after that day.
+- **Every N days** - every other day, weekly or fortnightly, from a chosen first day.
+- **Taken earlier / Undo** - log the time you actually took it, or undo the last dose.
+- **Who took it** - recorded from the Home Assistant user, and shown in History.
+- **Adherence and CSV export** - on the History tab.
+
+### Dashboard card
+
+```yaml
+type: custom:medication-tracker-today-card
+title: Medications     # optional
+profile: mike          # optional - only this person (profile id)
+```
+
+## Managing medications (options flow)
+
+The original guided setup flow still works too:
 
 1. Open `Settings -> Devices & services`
 2. Open `Medication Tracker`
@@ -184,8 +217,17 @@ The integration can create persistent notifications and also fire events you can
 - `medication_tracker_dose_missed`
 - `medication_tracker_refill_needed`
 - `medication_tracker_nfc_logged`
+- `medication_tracker_dose_escalated` (a dose is still not taken after the escalation delay)
+- `medication_tracker_dose_taken` (fired whenever dose(s) are logged, with the `source`: `panel`, `mobile_action`, `nfc`, `assist`, `button`, `manual`)
 
-If a medication has a `notify_service` configured, Medication Tracker can also send actionable mobile notifications with `Taken` action buttons.
+Reminders go to the phone chosen in the panel's Settings (or a medication's own `notify_service`). The notification has action buttons:
+
+- one medication: **Taken**, **Snooze 10 min**, **Skip**
+- several medications due together: **All taken** plus **Taken: <name>** for the first two (Android shows at most three buttons; the panel handles the rest)
+
+Reminders repeat (default every 5 minutes, up to 2 more times) until the dose is taken, skipped or snoozed, and the notification disappears from your phone as soon as the dose is logged, from any route. If the notify service name is wrong or the phone is unreachable, a warning appears in `Settings -> System -> Repairs` and the failure is logged once instead of every minute.
+
+Doses are matched to the schedule generously: a dose up to two hours early still counts for the next scheduled time, and a late dose counts for the slot it was meant for. A medication added mid-day does not report earlier slots that day as missed, and `Has Missed Dose` only turns on for doses missed in the last 24 hours.
 
 When more than one medication matches the same person or pet and notification target, the integration now combines related due, missed-dose, refill, and caregiver alerts into one structured notification with a medication list instead of sending one separate alert per medication.
 
@@ -193,7 +235,7 @@ If a medication has caregiver confirmation enabled, the integration can also rai
 
 Each medication device also exposes button entities you can press from Home Assistant to test due, missed-dose, refill, and caregiver confirmation notifications without waiting for a real schedule event.
 
-An example notification package lives at [examples/packages/medication_tracker_notifications.yaml](//192.168.4.229/html/!HA%20Integrations/Medication%20Tracker/examples/packages/medication_tracker_notifications.yaml).
+An example notification package lives at [examples/packages/medication_tracker_notifications.yaml](examples/packages/medication_tracker_notifications.yaml).
 
 ## Assist
 
@@ -219,17 +261,29 @@ Reliable Assist phrases:
 - `Medication stock check for Bella`
 - `Log medication omeprazole as taken`
 - `Log medication omeprazole for Mike as taken`
+- `I took all my medications` / `Mark all medications as taken for Mike`
 
 ## NFC
 
-Set an `nfc_tag_id` on a medication and scan that tag to log the dose automatically.
+Write a tag with the Home Assistant Companion app (`Settings -> Tags -> Create tag -> Write to NFC`), then:
+
+- **One medication** - set the tag on the medication's edit page in the panel (press **Scan**, tap the tag). Scanning logs that dose.
+- **Everything due** - add the tag under `Settings -> NFC tags` in the panel. Scanning marks everything currently due as taken.
+- **One person** - set a tag against a person in the same place. Scanning marks only that person's due medications as taken.
+
+If nothing is due when an "everything" or "person" tag is scanned, no dose is logged and a notification says so.
 
 ## Services
 
 The UI is the preferred way to manage medications, but services are still available for automations and power users:
 
-- `medication_tracker.add_medication`
+- `medication_tracker.add_medication` (now also `days_of_week`, `repeat_every_minutes`, `max_repeats`)
 - `medication_tracker.log_dose`
+- `medication_tracker.log_all_due` (optionally `profile_id` or `medication_ids`)
+- `medication_tracker.delete_dose`
+- `medication_tracker.reset_history`
+- `medication_tracker.update_settings`
+- `medication_tracker.undo_last_dose`
 - `medication_tracker.refill_medication`
 - `medication_tracker.remove_medication`
 - `medication_tracker.snooze_medication`

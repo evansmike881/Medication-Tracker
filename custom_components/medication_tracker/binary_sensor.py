@@ -98,7 +98,7 @@ class MedicationBinarySensor(CoordinatorEntity, BinarySensorEntity):
         if not snapshot:
             return None
         if self.entity_description.key == "has_missed_dose":
-            return snapshot["missed_doses"] > 0
+            return snapshot["recent_missed"]
         return bool(snapshot.get(self.entity_description.key))
 
     @property

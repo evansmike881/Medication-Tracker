@@ -14,6 +14,7 @@ class DoseLog:
     taken_at: datetime
     source: str = "manual"
     confirmed_by: str | None = None
+    taken_by: str | None = None
 
     def as_dict(self) -> dict[str, str | None]:
         """Serialize a dose log."""
@@ -21,6 +22,7 @@ class DoseLog:
             "taken_at": self.taken_at.isoformat(),
             "source": self.source,
             "confirmed_by": self.confirmed_by,
+            "taken_by": self.taken_by,
         }
 
     @classmethod
@@ -30,6 +32,7 @@ class DoseLog:
             taken_at=datetime.fromisoformat(data["taken_at"]),
             source=data.get("source", "manual"),
             confirmed_by=data.get("confirmed_by"),
+            taken_by=data.get("taken_by"),
         )
 
 
@@ -60,6 +63,19 @@ class Medication:
     reminder_minutes: int = 15
     missed_after_minutes: int = 60
     duplicate_guard_minutes: int = 0
+    repeat_every_minutes: int = 5
+    max_repeats: int = 2
+    days_of_week: list[int] | None = None
+    end_date: date | None = None
+    as_needed: bool = False
+    max_doses_per_day: int | None = None
+    interval_days: int = 1
+    anchor_date: date | None = None
+    escalate_after_minutes: int = 0
+    last_escalation_notification: str | None = None
+    created_at: str | None = None
+    last_due_sent_at: str | None = None
+    due_repeat_count: int = 0
     last_due_notification: str | None = None
     last_missed_notification: str | None = None
     last_refill_notification: str | None = None
@@ -95,6 +111,19 @@ class Medication:
             "reminder_minutes": self.reminder_minutes,
             "missed_after_minutes": self.missed_after_minutes,
             "duplicate_guard_minutes": self.duplicate_guard_minutes,
+            "repeat_every_minutes": self.repeat_every_minutes,
+            "max_repeats": self.max_repeats,
+            "days_of_week": self.days_of_week,
+            "end_date": self.end_date.isoformat() if self.end_date else None,
+            "as_needed": self.as_needed,
+            "max_doses_per_day": self.max_doses_per_day,
+            "interval_days": self.interval_days,
+            "anchor_date": self.anchor_date.isoformat() if self.anchor_date else None,
+            "escalate_after_minutes": self.escalate_after_minutes,
+            "last_escalation_notification": self.last_escalation_notification,
+            "created_at": self.created_at,
+            "last_due_sent_at": self.last_due_sent_at,
+            "due_repeat_count": self.due_repeat_count,
             "last_due_notification": self.last_due_notification,
             "last_missed_notification": self.last_missed_notification,
             "last_refill_notification": self.last_refill_notification,
@@ -132,6 +161,23 @@ class Medication:
             reminder_minutes=data.get("reminder_minutes", 15),
             missed_after_minutes=data.get("missed_after_minutes", 60),
             duplicate_guard_minutes=data.get("duplicate_guard_minutes", 0),
+            repeat_every_minutes=data.get("repeat_every_minutes", 5),
+            max_repeats=data.get("max_repeats", 2),
+            days_of_week=(
+                sorted({int(day) for day in data["days_of_week"]})
+                if data.get("days_of_week")
+                else None
+            ),
+            end_date=date.fromisoformat(data["end_date"]) if data.get("end_date") else None,
+            as_needed=bool(data.get("as_needed", False)),
+            max_doses_per_day=data.get("max_doses_per_day"),
+            interval_days=max(int(data.get("interval_days", 1) or 1), 1),
+            anchor_date=date.fromisoformat(data["anchor_date"]) if data.get("anchor_date") else None,
+            escalate_after_minutes=int(data.get("escalate_after_minutes", 0) or 0),
+            last_escalation_notification=data.get("last_escalation_notification"),
+            created_at=data.get("created_at"),
+            last_due_sent_at=data.get("last_due_sent_at"),
+            due_repeat_count=data.get("due_repeat_count", 0),
             last_due_notification=data.get("last_due_notification"),
             last_missed_notification=data.get("last_missed_notification"),
             last_refill_notification=data.get("last_refill_notification"),

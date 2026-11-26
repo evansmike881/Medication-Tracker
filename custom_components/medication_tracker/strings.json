@@ -211,5 +211,11 @@
     "error": {
       "at_least_one_time": "Add at least one schedule time."
     }
+  },
+  "issues": {
+    "notify_target_missing": {
+      "title": "Medication reminders can't reach your phone",
+      "description": "Medication Tracker could not send a reminder using the notify service \"{service}\". Open the Medications panel > Settings and choose a working notify service (for example notify.mobile_app_your_phone). Make sure the Home Assistant Companion app is signed in on that phone."
+    }
   }
 }

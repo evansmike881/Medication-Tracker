@@ -6,6 +6,9 @@
     "US"
   ],
   "domains": [
+    "binary_sensor",
+    "button",
+    "calendar",
     "sensor"
   ],
   "filename": "custom_components/medication_tracker/manifest.json",

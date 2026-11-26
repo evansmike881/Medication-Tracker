@@ -5,6 +5,21 @@ lists:
   profile:
     wildcard: true
 intents:
+  MedicationLogAllIntent:
+    data:
+      - sentences:
+          - "I took all my medications"
+          - "I took all my meds"
+          - "I have taken all my medications"
+          - "mark all medications as taken"
+          - "mark all meds as taken"
+          - "log all medications as taken"
+          - "all medications taken"
+      - sentences:
+          - "{profile} took all [their] medications"
+          - "{profile} took all [their] meds"
+          - "mark all medications as taken for {profile}"
+          - "log all medications as taken for {profile}"
   MedicationStatusIntent:
     data:
       - sentences:

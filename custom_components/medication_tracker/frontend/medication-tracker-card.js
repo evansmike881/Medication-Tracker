@@ -1361,10 +1361,10 @@ class MedicationTrackerWeeklyCardEditor extends HTMLElement {
   }
 }
 
-customElements.define("medication-tracker-card", MedicationTrackerCard);
-customElements.define("medication-tracker-card-editor", MedicationTrackerCardEditor);
-customElements.define("medication-tracker-weekly-card", MedicationTrackerWeeklyCard);
-customElements.define("medication-tracker-weekly-card-editor", MedicationTrackerWeeklyCardEditor);
+if (!customElements.get("medication-tracker-card")) customElements.define("medication-tracker-card", MedicationTrackerCard);
+if (!customElements.get("medication-tracker-card-editor")) customElements.define("medication-tracker-card-editor", MedicationTrackerCardEditor);
+if (!customElements.get("medication-tracker-weekly-card")) customElements.define("medication-tracker-weekly-card", MedicationTrackerWeeklyCard);
+if (!customElements.get("medication-tracker-weekly-card-editor")) customElements.define("medication-tracker-weekly-card-editor", MedicationTrackerWeeklyCardEditor);
 
 window.customCards = window.customCards || [];
 window.customCards.push({
