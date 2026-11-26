@@ -26,6 +26,7 @@ from .const import (
     EVENT_DOSE_ESCALATED,
     EVENT_DOSE_MISSED,
     EVENT_REFILL_NEEDED,
+    PANEL_URL_PATH,
     SETTING_ANNOUNCE_HOME_ENTITY,
     SETTING_ANNOUNCE_SERVICE,
     SETTING_CRITICAL,
@@ -39,6 +40,7 @@ _LOGGER = logging.getLogger(__name__)
 # Alert types that are time-sensitive enough to use the loud, alarm-style notification.
 CRITICAL_TYPES = {"due", "missed", "escalation"}
 ALARM_CHANNEL = "alarm_stream"
+PANEL_PATH = f"/{PANEL_URL_PATH}"
 
 
 class MedicationAlertEngine:
@@ -145,7 +147,7 @@ class MedicationAlertEngine:
         persistent_notification.async_create(
             self.hass,
             message=message,
-            title="Medication Tracker",
+            title=alert.get("title") or "Medication Tracker",
             notification_id=notification_id,
         )
 
@@ -161,6 +163,7 @@ class MedicationAlertEngine:
                 notification_tag=notification_id,
                 actions=alert.get("actions"),
                 critical=critical,
+                title=alert.get("title"),
             )
             used_service = notify_service if delivered else None
             if not delivered:
@@ -173,6 +176,7 @@ class MedicationAlertEngine:
                         notification_tag=notification_id,
                         actions=alert.get("actions"),
                         critical=critical,
+                        title=alert.get("title"),
                     )
                     used_service = fallback if delivered else None
 
@@ -223,11 +227,20 @@ class MedicationAlertEngine:
             return
         names = " and ".join(", ".join(m.name for m in medications).rsplit(", ", 1))
         who = medications[0].profile_name
-        spoken = (
-            f"Medication reminder. {who}, please take {names}."
-            if alert["type"] == "due"
-            else f"{who} has missed {names}."
-        )
+        group_names = {self.manager._group_name(m) for m in medications}
+        if len(medications) > 1 and len(group_names) == 1 and None not in group_names:
+            names = next(iter(group_names))
+            spoken = (
+                f"Medication reminder. {who}, it's time for {names}."
+                if alert["type"] == "due"
+                else f"{who} has missed {names}."
+            )
+        else:
+            spoken = (
+                f"Medication reminder. {who}, please take {names}."
+                if alert["type"] == "due"
+                else f"{who} has missed {names}."
+            )
         domain, name = service.split(".", 1)
         try:
             await self.hass.services.async_call(
@@ -289,6 +302,7 @@ class MedicationAlertEngine:
         notification_tag: str | None = None,
         actions: list[dict[str, str]] | None = None,
         critical: bool = False,
+        title: str | None = None,
     ) -> bool:
         """Send a mobile app notification with action buttons. Never raises."""
         if "." not in notify_service:
@@ -297,8 +311,11 @@ class MedicationAlertEngine:
         domain, service = notify_service.split(".", 1)
         payload = {
             "message": message,
-            "title": "Medication Tracker",
+            "title": title or "Medication Tracker",
             "data": {
+                # Tapping the notification opens the panel, where each item can be ticked off.
+                "clickAction": PANEL_PATH,
+                "url": PANEL_PATH,
                 "tag": notification_tag or f"{DOMAIN}_{medication_id}",
                 "actions": actions
                 or [{"action": f"{ACTION_CONFIRMED_PREFIX}{medication_id}", "title": "Taken"}],

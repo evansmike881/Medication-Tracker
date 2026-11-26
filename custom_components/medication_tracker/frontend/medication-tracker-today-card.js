@@ -65,13 +65,15 @@
     async _onClick(event) {
       const target = event.target.closest("[data-action]");
       if (!target || this._busy) return;
-      const { action, id, profile } = target.dataset;
+      const { action, id, profile, ids } = target.dataset;
       const msg =
         action === "take"
           ? { type: "medication_tracker/take", medication_id: id }
-          : action === "take-all"
-            ? { type: "medication_tracker/take_all", ...(profile ? { profile_id: profile } : {}) }
-            : null;
+          : action === "take-group"
+            ? { type: "medication_tracker/take_all", medication_ids: (ids || "").split(",").filter(Boolean) }
+            : action === "take-all"
+              ? { type: "medication_tracker/take_all", ...(profile ? { profile_id: profile } : {}) }
+              : null;
       if (!msg) return;
       this._busy = true;
       try {
@@ -95,16 +97,31 @@
         const doses = (s.today || []).filter(only);
         const asNeeded = (s.as_needed || []).filter(only);
         const due = doses.filter((d) => d.can_take).length;
-        const rows = doses
-          .map(
-            (d) => `<div class="row"><span class="time">${esc(d.time)}</span>
-              <div class="grow">${esc(d.medication_name)}<div class="sub">${esc(d.profile_name)} · ${esc(d.dosage)}</div></div>
+        const doseRow = (d, inGroup) => `<div class="row">${inGroup ? "" : `<span class="time">${esc(d.time)}</span>`}
+              <div class="grow">${esc(d.medication_name)}<div class="sub">${inGroup ? "" : esc(d.profile_name) + " · "}${esc(d.dosage)}</div></div>
               ${
                 d.can_take
                   ? `<button data-action="take" data-id="${esc(d.medication_id)}">Taken</button>`
                   : `<span class="chip ${CLASS[d.status] || "muted"}">${esc(LABEL[d.status] || d.status)}</span>`
-              }</div>`
-          )
+              }</div>`;
+        const blocks = [];
+        for (const d of doses) {
+          const key = d.group_id ? `${d.scheduled_at}|${d.group_id}` : null;
+          const last = blocks[blocks.length - 1];
+          if (key && last && last.key === key) last.doses.push(d);
+          else blocks.push({ key, doses: [d] });
+        }
+        const rows = blocks
+          .map((blk) => {
+            if (!blk.key) return doseRow(blk.doses[0], false);
+            const first = blk.doses[0];
+            const done = blk.doses.filter((d) => d.status === "Taken").length;
+            const ready = blk.doses.filter((d) => d.can_take);
+            return `<div class="block"><div class="bhead"><span class="time">${esc(first.time)}</span>
+              <div class="grow"><b>${esc(first.group_name)}</b><div class="sub">${esc(first.profile_name)} · ${done} of ${blk.doses.length} taken</div></div>
+              ${ready.length ? `<button data-action="take-group" data-ids="${esc(ready.map((d) => d.medication_id).join(","))}">✓ All${ready.length < blk.doses.length ? ` (${ready.length})` : ""}</button>` : ""}</div>
+              ${blk.doses.map((d) => doseRow(d, true)).join("")}</div>`;
+          })
           .join("");
         const prn = asNeeded
           .map((m) => {
@@ -123,6 +140,9 @@
         h2 { margin:0 0 8px; font-size:18px; font-weight:500; color:var(--primary-text-color); }
         .row { display:flex; align-items:center; gap:12px; padding:8px 0; border-top:1px solid var(--divider-color); color:var(--primary-text-color); }
         .row:first-of-type { border-top:0; }
+        .block { border:1px solid var(--divider-color); border-radius:10px; margin:6px 0; padding:2px 10px; }
+        .bhead { display:flex; align-items:center; gap:12px; padding:8px 0; color:var(--primary-text-color); }
+        .block .row:first-of-type { border-top:1px solid var(--divider-color); }
         .time { font-variant-numeric:tabular-nums; font-weight:600; min-width:46px; }
         .grow { flex:1; min-width:0; } .sub { color:var(--secondary-text-color); font-size:12px; }
         button { font:inherit; font-size:14px; border:0; border-radius:16px; padding:6px 14px; cursor:pointer; background:var(--primary-color); color:var(--text-primary-color,#fff); }

@@ -178,6 +178,22 @@ class MedicationLogIntent(MedicationBaseIntent):
 
         medication = self._find_medication(medication_name, profile_name)
         if medication is None:
+            group = next(
+                (
+                    g
+                    for g in self._manager.groups.values()
+                    if medication_name.casefold() in g.name.casefold()
+                    and (not profile_name or profile_name.casefold() in g.profile_name.casefold())
+                ),
+                None,
+            )
+            if group is not None:
+                result = await async_take_all(self.hass, group_id=group.group_id, source="assist")
+                if result["logged"]:
+                    response.async_set_speech(f"Marked {group.name} as taken.")
+                else:
+                    response.async_set_speech(f"Nothing in {group.name} is due right now.")
+                return response
             if profile_name:
                 response.async_set_speech(
                     f"I could not find a medication called {medication_name} for {profile_name}."

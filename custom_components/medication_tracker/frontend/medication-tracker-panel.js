@@ -55,6 +55,29 @@
     anchor_date: "",
     end_date: "",
     escalate_after_minutes: 0,
+    group_id: "",
+  });
+
+  const blankGroup = (profiles) => ({
+    group_id: null,
+    profile_name: Object.values(profiles || {}).length === 1 ? Object.values(profiles)[0] : "",
+    name: "",
+    schedules: ["08:00"],
+    days: [0, 1, 2, 3, 4, 5, 6],
+    interval_days: 1,
+    anchor_date: "",
+    notify_service: "",
+    nfc_tag_id: "",
+    notification_enabled: true,
+    member_ids: [],
+  });
+
+  const blankQuick = (profiles) => ({
+    profile_name: Object.values(profiles || {}).length === 1 ? Object.values(profiles)[0] : "",
+    group_choice: "new",
+    new_name: "",
+    schedules: ["08:00"],
+    text: "",
   });
 
   const formFromSnapshot = (s) => ({
@@ -88,6 +111,7 @@
     anchor_date: s.anchor_date || "",
     end_date: s.end_date || "",
     escalate_after_minutes: s.escalate_after_minutes ?? 0,
+    group_id: s.group_id || "",
   });
 
   const num = (value) => (value === "" || value === null || value === undefined ? null : Number(value));
@@ -138,6 +162,26 @@
     table { width:100%; border-collapse:collapse; font-size:14px; }
     th, td { text-align:left; padding:8px 6px; border-top:1px solid var(--divider-color); }
     th { font-weight:500; color:var(--secondary-text-color); border-top:0; }
+    .handle { cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none; background:none; border:0; color:var(--secondary-text-color); font-size:20px; line-height:1; padding:8px 6px; border-radius:6px; min-width:34px; min-height:38px; }
+    .handle:focus-visible { outline:2px solid var(--primary-color); }
+    .dragging { opacity:.35; }
+    .ghost { position:fixed; z-index:50; pointer-events:none; background:var(--card-background-color,#fff); border:1px solid var(--primary-color); border-radius:8px; padding:8px 14px; box-shadow:0 6px 18px rgba(0,0,0,.3); max-width:80vw; }
+    .dropline { height:4px; border-radius:2px; background:var(--primary-color); margin:2px 0; pointer-events:none; }
+    .zone { border:2px dashed transparent; border-radius:10px; padding:2px; min-height:40px; }
+    .zone.over { border-color:var(--primary-color); background:rgba(3,169,244,.08); }
+    .zone.ungrouped { border-color:var(--divider-color); }
+    .gcard { border:1px solid var(--divider-color); border-radius:10px; padding:8px 10px; margin-bottom:10px; }
+    .gcard.over { border-color:var(--primary-color); }
+    .mrow { display:flex; align-items:center; gap:8px; padding:6px 0; border-top:1px solid var(--divider-color); flex-wrap:wrap; }
+    .mrow.first { border-top:0; }
+    .emptyhint { color:var(--secondary-text-color); font-size:13px; padding:10px; text-align:center; }
+    .block { border:1px solid var(--divider-color); border-radius:10px; margin:8px 0; padding:4px 10px; }
+    .bhead { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:6px 0; }
+    .bar2 { height:6px; border-radius:3px; background:var(--divider-color); overflow:hidden; min-width:80px; flex:1; }
+    .bar2 > i { display:block; height:100%; background:#43a047; }
+    .memberlist label { display:flex; gap:8px; align-items:center; padding:6px 0; color:var(--primary-text-color); font-size:14px; }
+    textarea { width:100%; min-height:140px; }
+    .hint { background:rgba(3,169,244,.1); border-radius:8px; padding:10px 14px; margin-bottom:12px; font-size:13px; }
     @media (max-width:600px) { main { padding:8px; } .hide-narrow { display:none; } }
   `;
 
@@ -148,6 +192,9 @@
       this._state = null;
       this._tab = "today";
       this._form = null;
+      this._gform = null;
+      this._quick = null;
+      this._drag = null;
       this._settingsDraft = null;
       this._toast = null;
       this._scan = null;
@@ -157,6 +204,12 @@
       this.shadowRoot.addEventListener("click", (e) => this._onClick(e));
       this.shadowRoot.addEventListener("input", (e) => this._onInput(e));
       this.shadowRoot.addEventListener("change", (e) => this._onInput(e));
+      this.shadowRoot.addEventListener("pointerdown", (e) => this._onPointerDown(e));
+      this.shadowRoot.addEventListener("keydown", (e) => this._onKeyDown(e));
+    }
+
+    get _editing() {
+      return this._form || this._gform || this._quick;
     }
 
     set hass(hass) {
@@ -182,6 +235,7 @@
     disconnectedCallback() {
       clearInterval(this._timer);
       this._timer = null;
+      this._endDrag(false);
       this._stopScan();
     }
 
@@ -205,7 +259,7 @@
 
     _poll() {
       // Never refresh underneath a form the user is typing in.
-      if (this._form || this._tab === "settings") return;
+      if (this._editing || this._drag || this._tab === "settings") return;
       this._load();
     }
 
@@ -256,6 +310,8 @@
           this._stopScan();
           this._tab = tab;
           this._form = null;
+          this._gform = null;
+          this._quick = null;
           if (tab === "settings") this._settingsDraft = JSON.parse(JSON.stringify(this._state.settings));
           this._render();
           break;
@@ -267,6 +323,64 @@
             { type: "medication_tracker/take_all", ...(profile ? { profile_id: profile } : {}) },
             "Marked everything due as taken"
           );
+          break;
+        case "take-group":
+          this._run(
+            { type: "medication_tracker/take_all", medication_ids: (target.dataset.ids || "").split(",").filter(Boolean) },
+            `Marked ${target.dataset.label || "the group"} as taken`
+          );
+          break;
+        case "new-group":
+          this._tab = "medications";
+          this._form = null;
+          this._quick = null;
+          this._gform = blankGroup(this._state.profiles);
+          this._render();
+          break;
+        case "edit-group": {
+          const g = (this._state.groups || []).find((x) => x.group_id === id);
+          if (g) {
+            this._gform = {
+              group_id: g.group_id,
+              profile_name: g.profile_name,
+              name: g.name,
+              schedules: [...g.schedules],
+              days: g.days_of_week && g.days_of_week.length ? [...g.days_of_week] : [0, 1, 2, 3, 4, 5, 6],
+              interval_days: g.interval_days || 1,
+              anchor_date: g.anchor_date || "",
+              notify_service: g.notify_service || "",
+              nfc_tag_id: g.nfc_tag_id || "",
+              notification_enabled: g.notification_enabled !== false,
+              member_ids: [...(g.member_ids || [])],
+            };
+            this._render();
+          }
+          break;
+        }
+        case "save-group":
+          this._saveGroup();
+          break;
+        case "delete-group": {
+          const g = (this._state.groups || []).find((x) => x.group_id === id);
+          if (g && window.confirm(`Delete the group ${g.name}? Its medications are kept and keep their current times.`)) {
+            this._run({ type: "medication_tracker/delete_group", group_id: id }, "Group deleted").then((r) => {
+              if (r) {
+                this._gform = null;
+                this._render();
+              }
+            });
+          }
+          break;
+        }
+        case "quick-add":
+          this._tab = "medications";
+          this._form = null;
+          this._gform = null;
+          this._quick = blankQuick(this._state.profiles);
+          this._render();
+          break;
+        case "save-quick":
+          this._saveQuick();
           break;
         case "take-earlier": {
           const answer = window.prompt("What time did you take it today? (HH:MM, 24-hour)", "");
@@ -314,6 +428,8 @@
         case "cancel":
           this._stopScan();
           this._form = null;
+          this._gform = null;
+          this._quick = null;
           this._render();
           break;
         case "save":
@@ -354,21 +470,23 @@
           }
           break;
         case "add-time":
-          this._form.schedules.push("12:00");
+          this._cur().schedules.push("12:00");
           this._render();
           break;
         case "remove-time":
-          if (this._form.schedules.length > 1) {
-            this._form.schedules.splice(Number(index), 1);
+          if (this._cur().schedules.length > 1) {
+            this._cur().schedules.splice(Number(index), 1);
             this._render();
           }
           break;
-        case "scan-form":
+        case "scan-form": {
+          const target_form = this._cur();
           this._startScan((tag) => {
-            this._form.nfc_tag_id = tag;
+            target_form.nfc_tag_id = tag;
             this._render();
           });
           break;
+        }
         case "scan-all":
           this._startScan((tag) => {
             const list = new Set(this._settingsDraft.all_tag_ids || []);
@@ -424,24 +542,70 @@
       }
     }
 
+    _cur() {
+      return this._gform || this._quick || this._form;
+    }
+
+    _profileIdByName(name) {
+      const wanted = (name || "").trim().toLowerCase();
+      const hit = Object.entries(this._state.profiles || {}).find(([, n]) => n.toLowerCase() === wanted);
+      return hit ? hit[0] : null;
+    }
+
+    _groupsFor(profileName) {
+      const pid = this._profileIdByName(profileName);
+      return pid ? (this._state.groups || []).filter((g) => g.profile_id === pid) : [];
+    }
+
+    _refreshDependent() {
+      const f = this._cur();
+      const root = this.shadowRoot;
+      if (!f) return;
+      if (this._form) {
+        const sel = root.querySelector("select[data-field=group_id]");
+        const groups = this._groupsFor(f.profile_name);
+        if (f.group_id && !groups.some((g) => g.group_id === f.group_id)) f.group_id = "";
+        if (sel) sel.innerHTML = this._groupOptions(groups, f.group_id, "No group");
+      } else if (this._quick) {
+        const sel = root.querySelector("select[data-field=group_choice]");
+        const groups = this._groupsFor(f.profile_name);
+        if (f.group_choice !== "new" && f.group_choice !== "" && !groups.some((g) => g.group_id === f.group_choice)) f.group_choice = "new";
+        if (sel) sel.innerHTML = this._quickGroupOptions(groups, f.group_choice);
+      } else if (this._gform) {
+        const box = root.querySelector(".memberlist");
+        if (box) box.innerHTML = this._memberListHtml();
+      }
+    }
+
     _onInput(event) {
       const el = event.target;
-      if (el.dataset.day !== undefined && this._form) {
+      const f = this._cur();
+      if (el.dataset.day !== undefined && f) {
         const day = Number(el.dataset.day);
-        const days = new Set(this._form.days);
+        const days = new Set(f.days);
         if (el.checked) days.add(day);
         else days.delete(day);
-        this._form.days = [...days].sort();
+        f.days = [...days].sort();
         return;
       }
-      if (el.dataset.time !== undefined && this._form) {
-        this._form.schedules[Number(el.dataset.time)] = el.value;
+      if (el.dataset.time !== undefined && f) {
+        f.schedules[Number(el.dataset.time)] = el.value;
         return;
       }
-      if (el.dataset.field && this._form) {
-        this._form[el.dataset.field] = el.type === "checkbox" ? el.checked : el.value;
-        if (el.dataset.field === "as_needed" && event.type === "change") this._render();
-        if (el.dataset.field === "medication_name") this._maybeFillFromDatabase(el.value);
+      if (el.dataset.member !== undefined && this._gform) {
+        const set = new Set(this._gform.member_ids);
+        if (el.checked) set.add(el.dataset.member);
+        else set.delete(el.dataset.member);
+        this._gform.member_ids = [...set];
+        return;
+      }
+      if (el.dataset.field && f) {
+        f[el.dataset.field] = el.type === "checkbox" ? el.checked : el.value;
+        const field = el.dataset.field;
+        if (field === "as_needed" && el.checked && this._form) this._form.group_id = "";
+        if (["as_needed", "group_id", "group_choice"].includes(field) && event.type === "change") this._render();
+        if (field === "profile_name") this._refreshDependent();
+        if (field === "medication_name" && this._form) this._maybeFillFromDatabase(el.value);
         return;
       }
       if (el.dataset.setting && this._settingsDraft) {
@@ -497,7 +661,7 @@
       const f = this._form;
       if (!f.profile_name.trim()) return this._say("Who is this medication for?", true);
       if (!f.medication_name.trim()) return this._say("Enter the medication name", true);
-      if (!f.as_needed) {
+      if (!f.as_needed && !f.group_id) {
         if (!f.schedules.length || f.schedules.some((t) => !t)) return this._say("Add at least one time", true);
         if (!f.days.length) return this._say("Choose at least one day", true);
       }
@@ -507,8 +671,9 @@
         profile_name: f.profile_name.trim(),
         medication_name: f.medication_name.trim(),
         dosage: f.dosage.trim() || "1 dose",
-        schedules: f.as_needed ? [] : f.schedules,
-        days_of_week: f.as_needed || f.days.length === 7 ? null : f.days,
+        schedules: f.as_needed || f.group_id ? [] : f.schedules,
+        group_id: f.as_needed ? null : f.group_id || null,
+        days_of_week: f.as_needed || f.group_id || f.days.length === 7 ? null : f.days,
         as_needed: !!f.as_needed,
         max_doses_per_day: Number(f.max_doses_per_day) || 0,
         interval_days: Number(f.interval_days) || 1,
@@ -541,6 +706,290 @@
           this._render();
         }
       });
+    }
+
+    _saveGroup() {
+      const f = this._gform;
+      if (!f.profile_name.trim()) return this._say("Who is this group for?", true);
+      if (!f.name.trim()) return this._say("Give the group a name, e.g. Morning vitamins", true);
+      if (!f.schedules.length || f.schedules.some((t) => !t)) return this._say("Add at least one time", true);
+      if (!f.days.length) return this._say("Choose at least one day", true);
+      this._run(
+        {
+          type: "medication_tracker/save_group",
+          group_id: f.group_id || null,
+          profile_name: f.profile_name.trim(),
+          name: f.name.trim(),
+          schedules: f.schedules,
+          days_of_week: f.days.length === 7 ? null : f.days,
+          interval_days: Number(f.interval_days) || 1,
+          anchor_date: f.anchor_date || null,
+          notify_service: f.notify_service || null,
+          nfc_tag_id: f.nfc_tag_id.trim() || null,
+          notification_enabled: !!f.notification_enabled,
+          member_ids: f.member_ids,
+        },
+        "Group saved"
+      ).then((result) => {
+        if (result) {
+          this._stopScan();
+          this._gform = null;
+          this._render();
+        }
+      });
+    }
+
+    _saveQuick() {
+      const f = this._quick;
+      if (!f.profile_name.trim()) return this._say("Who are these for?", true);
+      const items = f.text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          const cut = line.indexOf(",");
+          const name = (cut < 0 ? line : line.slice(0, cut)).trim();
+          const dosage = cut < 0 ? "" : line.slice(cut + 1).trim();
+          return { name, ...(dosage ? { dosage } : {}) };
+        })
+        .filter((item) => item.name);
+      if (!items.length) return this._say("Type one medication per line, e.g. Vitamin D, 1000 IU", true);
+      const needsTimes = f.group_choice === "new" || f.group_choice === "";
+      if (needsTimes && (!f.schedules.length || f.schedules.some((t) => !t))) return this._say("Add at least one time", true);
+      if (f.group_choice === "new" && !f.new_name.trim()) return this._say("Give the new group a name", true);
+      const msg = { type: "medication_tracker/quick_add", profile_name: f.profile_name.trim(), items };
+      if (f.group_choice === "new") msg.new_group = { name: f.new_name.trim(), schedules: f.schedules };
+      else if (f.group_choice) msg.group_id = f.group_choice;
+      else msg.schedules = f.schedules;
+      this._run(msg, `Added ${items.length} medication${items.length === 1 ? "" : "s"}`).then((result) => {
+        if (result) {
+          this._quick = null;
+          this._render();
+        }
+      });
+    }
+
+    // ------------------------------------------------------- drag and drop
+
+    _onPointerDown(event) {
+      const handle = event.target.closest && event.target.closest("[data-drag]");
+      if (!handle || !this._isAdmin || this._busy || this._drag) return;
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      const row = handle.closest("[data-row]");
+      if (!row) return;
+      event.preventDefault();
+      const ghost = document.createElement("div");
+      ghost.className = "ghost";
+      ghost.textContent = row.dataset.label || "";
+      this.shadowRoot.appendChild(ghost);
+      row.classList.add("dragging");
+      try {
+        handle.setPointerCapture(event.pointerId);
+      } catch (_err) {
+        /* not every environment supports capture */
+      }
+      this._drag = {
+        kind: handle.dataset.drag,
+        id: handle.dataset.id,
+        profile: row.dataset.profile,
+        row,
+        ghost,
+        target: null,
+        y: event.clientY,
+        scrollers: this._scrollParents(),
+      };
+      this._dragListeners = {
+        move: (e) => this._dragMove(e),
+        up: (e) => this._endDrag(true, e),
+        cancel: () => this._endDrag(false),
+        key: (e) => e.key === "Escape" && this._endDrag(false),
+      };
+      window.addEventListener("pointermove", this._dragListeners.move);
+      window.addEventListener("pointerup", this._dragListeners.up);
+      window.addEventListener("pointercancel", this._dragListeners.cancel);
+      window.addEventListener("keydown", this._dragListeners.key);
+      this._dragMove(event);
+      const tick = () => {
+        if (!this._drag) return;
+        const d = this._drag;
+        const edge = 70;
+        let delta = 0;
+        if (d.y < edge) delta = -Math.ceil((edge - d.y) / 6);
+        else if (d.y > window.innerHeight - edge) delta = Math.ceil((d.y - (window.innerHeight - edge)) / 6);
+        if (delta) {
+          for (const el of d.scrollers) el.scrollTop += delta;
+          this._dragMove({ clientX: d.x, clientY: d.y });
+        }
+        this._dragFrame = requestAnimationFrame(tick);
+      };
+      this._dragFrame = requestAnimationFrame(tick);
+    }
+
+    _scrollParents() {
+      const list = [];
+      let node = this;
+      while (node) {
+        if (node.nodeType === 1) {
+          const oy = getComputedStyle(node).overflowY;
+          if ((oy === "auto" || oy === "scroll") && node.scrollHeight > node.clientHeight) list.push(node);
+        }
+        node = node.parentNode || node.host;
+      }
+      if (document.scrollingElement) list.push(document.scrollingElement);
+      return list;
+    }
+
+    _dragMove(event) {
+      const d = this._drag;
+      if (!d) return;
+      d.x = event.clientX;
+      d.y = event.clientY;
+      d.ghost.style.left = `${event.clientX + 12}px`;
+      d.ghost.style.top = `${event.clientY + 8}px`;
+      const root = this.shadowRoot;
+      root.querySelectorAll(".dropline").forEach((n) => n.remove());
+      root.querySelectorAll(".over").forEach((n) => n.classList.remove("over"));
+      d.target = null;
+      const under = root.elementFromPoint(event.clientX, event.clientY);
+      if (!under) return;
+      let container;
+      let rows;
+      if (d.kind === "med") {
+        container = under.closest("[data-zone]");
+        if (!container || container.dataset.profile !== d.profile) return;
+        container.classList.add("over");
+        rows = [...container.querySelectorAll('[data-row="med"]')].filter((r) => r !== d.row);
+      } else {
+        container = under.closest("[data-grouplist]");
+        if (!container || container.dataset.profile !== d.profile) return;
+        rows = [...container.querySelectorAll(':scope > [data-row="group"]')].filter((r) => r !== d.row);
+      }
+      let index = 0;
+      for (const r of rows) {
+        const box = r.getBoundingClientRect();
+        if (event.clientY > box.top + box.height / 2) index += 1;
+      }
+      const line = document.createElement("div");
+      line.className = "dropline";
+      const body = container.querySelector(".zonebody") || container;
+      if (rows[index]) rows[index].parentNode.insertBefore(line, rows[index]);
+      else if (rows.length) rows[rows.length - 1].parentNode.appendChild(line);
+      else body.appendChild(line);
+      d.target = { container, index, zone: container.dataset.zone };
+    }
+
+    _endDrag(drop, event) {
+      const d = this._drag;
+      if (!d) return;
+      this._drag = null;
+      cancelAnimationFrame(this._dragFrame);
+      const l = this._dragListeners || {};
+      window.removeEventListener("pointermove", l.move);
+      window.removeEventListener("pointerup", l.up);
+      window.removeEventListener("pointercancel", l.cancel);
+      window.removeEventListener("keydown", l.key);
+      if (event && drop) {
+        this._drag = d; // settle the target at the exact release point
+        this._dragMove(event);
+        this._drag = null;
+      }
+      d.ghost.remove();
+      d.row.classList.remove("dragging");
+      this.shadowRoot.querySelectorAll(".dropline").forEach((n) => n.remove());
+      this.shadowRoot.querySelectorAll(".over").forEach((n) => n.classList.remove("over"));
+      if (!drop || !d.target) return;
+      if (d.kind === "med") this._moveMedication(d.id, d.target.zone || null, d.target.index);
+      else this._moveGroup(d.id, d.profile, d.target.index);
+    }
+
+    _onKeyDown(event) {
+      const handle = event.target.closest && event.target.closest("[data-drag]");
+      if (!handle || !this._isAdmin) return;
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+      event.preventDefault();
+      const step = event.key === "ArrowUp" ? -1 : 1;
+      const id = handle.dataset.id;
+      if (handle.dataset.drag === "med") {
+        const m = this._state.medications.find((x) => x.medication_id === id);
+        if (!m) return;
+        const sibs = this._siblings(m);
+        const at = sibs.findIndex((x) => x.medication_id === id);
+        const to = Math.max(0, Math.min(sibs.length - 1, at + step));
+        if (to !== at) this._moveMedication(id, m.group_id || null, to, handle.dataset.id);
+      } else {
+        const g = (this._state.groups || []).find((x) => x.group_id === id);
+        if (!g) return;
+        const ids = this._state.groups.filter((x) => x.profile_id === g.profile_id).map((x) => x.group_id);
+        const at = ids.indexOf(id);
+        const to = Math.max(0, Math.min(ids.length - 1, at + step));
+        if (to !== at) this._moveGroup(id, g.profile_id, to, id);
+      }
+    }
+
+    _siblings(m) {
+      return this._state.medications
+        .filter((x) => x.profile_id === m.profile_id && (x.group_id || null) === (m.group_id || null) && !x.as_needed)
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.medication_name.localeCompare(b.medication_name));
+    }
+
+    async _moveMedication(id, groupId, index, refocus) {
+      const m = this._state.medications.find((x) => x.medication_id === id);
+      if (!m) return;
+      // Update the screen straight away; the server reply then confirms it.
+      const wasGroup = m.group_id || null;
+      const dest = { ...m, group_id: groupId };
+      const sibs = this._siblings(dest).filter((x) => x.medication_id !== id);
+      sibs.splice(Math.min(index, sibs.length), 0, m);
+      sibs.forEach((x, i) => (x.sort_order = i));
+      m.group_id = groupId;
+      if (groupId) {
+        const g = (this._state.groups || []).find((x) => x.group_id === groupId);
+        if (g) {
+          for (const gg of this._state.groups) gg.member_ids = (gg.member_ids || []).filter((x) => x !== id);
+          const ids = sibs.map((x) => x.medication_id);
+          g.member_ids = ids;
+          m.schedules = [...g.schedules];
+        }
+      } else {
+        for (const gg of this._state.groups || []) gg.member_ids = (gg.member_ids || []).filter((x) => x !== id);
+      }
+      this._render();
+      if (refocus) this._focusHandle("med", refocus);
+      try {
+        await this._call({ type: "medication_tracker/move_medication", medication_id: id, group_id: groupId, index });
+        if (wasGroup !== groupId) {
+          const g = (this._state.groups || []).find((x) => x.group_id === groupId);
+          this._say(g ? `Moved to ${g.name}` : "Removed from group");
+        }
+      } catch (err) {
+        this._say((err && err.message) || "Could not move that", true);
+      }
+      await this._load();
+      if (refocus) this._focusHandle("med", refocus);
+    }
+
+    async _moveGroup(id, profileId, index, refocus) {
+      const ids = (this._state.groups || []).filter((g) => g.profile_id === profileId).map((g) => g.group_id).filter((x) => x !== id);
+      ids.splice(Math.min(index, ids.length), 0, id);
+      ids.forEach((gid, i) => {
+        const g = this._state.groups.find((x) => x.group_id === gid);
+        if (g) g.order = i;
+      });
+      this._state.groups.sort((a, b) => a.profile_name.localeCompare(b.profile_name) || a.order - b.order);
+      this._render();
+      if (refocus) this._focusHandle("group", refocus);
+      try {
+        await this._call({ type: "medication_tracker/reorder_groups", profile_id: profileId, group_ids: ids });
+      } catch (err) {
+        this._say((err && err.message) || "Could not reorder", true);
+      }
+      await this._load();
+      if (refocus) this._focusHandle("group", refocus);
+    }
+
+    _focusHandle(kind, id) {
+      const el = this.shadowRoot.querySelector(`[data-drag="${kind}"][data-id="${CSS.escape(id)}"]`);
+      if (el) el.focus();
     }
 
     async _exportCsv() {
@@ -579,7 +1028,13 @@
       } else if (this._tab === "today") {
         body = this._renderToday();
       } else if (this._tab === "medications") {
-        body = this._form ? this._renderForm() : this._renderMedications();
+        body = this._form
+          ? this._renderForm()
+          : this._gform
+          ? this._renderGroupForm()
+          : this._quick
+          ? this._renderQuick()
+          : this._renderMedications();
       } else if (this._tab === "history") {
         body = this._renderHistory();
       } else {
@@ -641,24 +1096,47 @@
           .join("");
         parts.push(`<div class="card"><h2>As needed</h2>${rows}</div>`);
       }
+      const doseRow = (d, inGroup) => {
+        const cls = STATUS_CLASS[d.status] || "muted";
+        const label = STATUS_LABEL[d.status] || d.status;
+        const id = esc(d.medication_id);
+        let actions = "";
+        if (d.can_take) {
+          actions = `<div class="actions"><button class="btn" data-action="take" data-id="${id}">Taken</button>
+             <button class="btn secondary" data-action="take-earlier" data-id="${id}">Earlier…</button>
+             ${inGroup ? "" : `<button class="btn secondary" data-action="snooze" data-id="${id}" data-minutes="10">Snooze 10m</button>`}
+             <button class="btn secondary" data-action="skip" data-id="${id}">Skip</button></div>`;
+        } else if (d.status === "Taken") {
+          actions = `<div class="actions"><button class="btn secondary" data-action="undo" data-id="${id}">Undo</button></div>`;
+        }
+        return `<div class="row">${inGroup ? "" : `<span class="time">${esc(d.time)}</span>`}
+          <div class="grow"><div>${esc(d.medication_name)}</div><div class="sub">${esc(d.dosage)}</div></div>
+          <span class="chip ${cls}">${esc(label)}</span>${actions}</div>`;
+      };
       for (const [name, group] of Object.entries(byProfile)) {
         const canTake = group.doses.filter((d) => d.can_take).length;
-        const rows = group.doses
-          .map((d) => {
-            const cls = STATUS_CLASS[d.status] || "muted";
-            const label = STATUS_LABEL[d.status] || d.status;
-            let actions = "";
-            if (d.can_take) {
-              actions = `<div class="actions"><button class="btn" data-action="take" data-id="${esc(d.medication_id)}">Taken</button>
-                 <button class="btn secondary" data-action="take-earlier" data-id="${esc(d.medication_id)}">Earlier…</button>
-                 <button class="btn secondary" data-action="snooze" data-id="${esc(d.medication_id)}" data-minutes="10">Snooze 10m</button>
-                 <button class="btn secondary" data-action="skip" data-id="${esc(d.medication_id)}">Skip</button></div>`;
-            } else if (d.status === "Taken") {
-              actions = `<div class="actions"><button class="btn secondary" data-action="undo" data-id="${esc(d.medication_id)}">Undo</button></div>`;
-            }
-            return `<div class="row"><span class="time">${esc(d.time)}</span>
-              <div class="grow"><div>${esc(d.medication_name)}</div><div class="sub">${esc(d.dosage)}</div></div>
-              <span class="chip ${cls}">${esc(label)}</span>${actions}</div>`;
+        // Doses of one group at one time sit together as a checklist.
+        const blocks = [];
+        for (const d of group.doses) {
+          const key = d.group_id ? `${d.scheduled_at}|${d.group_id}` : null;
+          const last = blocks[blocks.length - 1];
+          if (key && last && last.key === key) last.doses.push(d);
+          else blocks.push({ key, group_id: d.group_id, group_name: d.group_name, time: d.time, doses: [d] });
+        }
+        const rows = blocks
+          .map((blk) => {
+            if (!blk.key) return doseRow(blk.doses[0], false);
+            const done = blk.doses.filter((d) => d.status === "Taken").length;
+            const total = blk.doses.length;
+            const ready = blk.doses.filter((d) => d.can_take);
+            const pct = Math.round((done / total) * 100);
+            const takeBtn = ready.length
+              ? `<button class="btn" data-action="take-group" data-label="${esc(blk.group_name)}" data-ids="${esc(ready.map((d) => d.medication_id).join(","))}">✓ Take all${ready.length < total ? ` (${ready.length})` : ""}</button>`
+              : "";
+            return `<div class="block" data-block="${esc(blk.group_id)}">
+              <div class="bhead"><span class="time">${esc(blk.time)}</span><strong>${esc(blk.group_name)}</strong>
+                <span class="sub">${done} of ${total} taken</span><div class="bar2"><i style="width:${pct}%"></i></div>${takeBtn}</div>
+              ${blk.doses.map((d) => doseRow(d, true)).join("")}</div>`;
           })
           .join("");
         const allBtn =
@@ -670,42 +1148,205 @@
       return parts.join("");
     }
 
+    _medRow(m, first) {
+      const admin = this._isAdmin;
+      const days = m.days_of_week && m.days_of_week.length ? m.days_of_week.map((d) => DAYS[d]).join(", ") : "Every day";
+      const stock =
+        m.remaining_quantity === null || m.remaining_quantity === undefined
+          ? "Stock not tracked"
+          : `${m.remaining_quantity} left${m.days_remaining !== null ? ` (~${m.days_remaining} days)` : ""}`;
+      const when = m.as_needed
+        ? `As needed${m.max_doses_per_day ? ` (max ${esc(m.max_doses_per_day)} per day)` : ""}`
+        : m.group_id
+        ? "⏰ with the group"
+        : `⏰ ${esc((m.schedules || []).join(", "))} · ${esc(m.interval_days > 1 ? "every " + m.interval_days + " days" : days)}`;
+      const handle =
+        admin && !m.as_needed
+          ? `<button class="handle" data-drag="med" data-id="${esc(m.medication_id)}" aria-label="Move ${esc(m.medication_name)}. Drag, or use the up and down arrow keys to reorder" title="Drag to move">⠿</button>`
+          : "";
+      return `<div class="mrow ${first ? "first" : ""}" data-row="med" data-id="${esc(m.medication_id)}" data-profile="${esc(m.profile_id)}" data-label="${esc(m.medication_name)} ${esc(m.dosage)}">
+        ${handle}
+        <div class="grow"><div>${esc(m.medication_name)} <span class="sub">${esc(m.dosage)}</span>${m.purpose ? ` <span class="sub">· ${esc(m.purpose)}</span>` : ""} ${m.needs_refill ? '<span class="chip warn">Refill needed</span>' : ""}</div>
+          <div class="sub">${when}${m.end_date ? ` · ${m.course_ended ? "course ended" : "until"} ${esc(m.end_date)}` : ""}</div>
+          <div class="sub">📦 ${esc(stock)}${m.nfc_tag_id ? " · 🏷 NFC tag set" : ""}${m.as_needed ? "" : ` · Adherence ${esc(m.compliance_percentage)}% · ${esc(m.missed_doses)} missed`}</div>
+          <div class="sub">Next: ${esc(fmtDateTime(m.next_dose))} · Last taken: ${esc(fmtDateTime(m.last_taken))}${m.last_taken_by ? " by " + esc(m.last_taken_by) : ""}</div></div>
+        <div class="actions">
+          <button class="btn secondary" data-action="refill" data-id="${esc(m.medication_id)}">Add stock</button>
+          ${admin ? `<button class="btn secondary" data-action="edit" data-id="${esc(m.medication_id)}">Edit</button>
+          <button class="btn danger" data-action="delete" data-id="${esc(m.medication_id)}">Delete</button>` : ""}
+        </div></div>`;
+    }
+
     _renderMedications() {
       const s = this._state;
       const admin = this._isAdmin;
       const header = `<div class="hero" style="margin-bottom:12px"><div class="sub">${s.medications.length} medication${
         s.medications.length === 1 ? "" : "s"
-      }</div>${admin ? '<button class="btn" data-action="add">+ Add medication</button>' : ""}</div>`;
-      if (!s.medications.length) {
-        return header + `<div class="card empty">No medications yet.</div>`;
+      }</div>${
+        admin
+          ? '<div class="actions"><button class="btn" data-action="add">+ Add medication</button><button class="btn secondary" data-action="quick-add">Quick add several</button><button class="btn secondary" data-action="new-group">+ New group</button></div>'
+          : ""
+      }</div>`;
+      if (!s.medications.length && !(s.groups || []).length) {
+        return (
+          header +
+          `<div class="card empty"><p>No medications yet.</p>${admin ? '<p class="sub">Taking several things at the same time, like vitamins? Use <b>Quick add several</b> to type them all in one go and get a single reminder.</p>' : ""}</div>`
+        );
       }
-      const cards = s.medications
-        .map((m) => {
-          const days = m.days_of_week && m.days_of_week.length ? m.days_of_week.map((d) => DAYS[d]).join(", ") : "Every day";
-          const stock =
-            m.remaining_quantity === null || m.remaining_quantity === undefined
-              ? "Stock not tracked"
-              : `${m.remaining_quantity} left${m.days_remaining !== null ? ` (~${m.days_remaining} days)` : ""}`;
-          return `<div class="card">
-            <div class="hero"><div><h2 style="margin:0">${esc(m.medication_name)} <span class="sub">${esc(m.dosage)}</span></h2>
-            <div class="sub">${esc(m.profile_name)}${m.purpose ? " · " + esc(m.purpose) : ""}</div></div>
-            ${m.needs_refill ? '<span class="chip warn">Refill needed</span>' : ""}</div>
-            <div class="sub" style="margin-top:8px">${
-              m.as_needed
-                ? `As needed${m.max_doses_per_day ? ` (max ${esc(m.max_doses_per_day)} per day)` : ""}`
-                : `⏰ ${esc((m.schedules || []).join(", "))} · ${esc(m.interval_days > 1 ? "every " + m.interval_days + " days" : days)}`
-            }${m.end_date ? ` · ${m.course_ended ? "course ended" : "until"} ${esc(m.end_date)}` : ""}</div>
-            <div class="sub">📦 ${esc(stock)}${m.nfc_tag_id ? " · 🏷 NFC tag set" : ""}</div>
-            <div class="sub">Next: ${esc(fmtDateTime(m.next_dose))} · Last taken: ${esc(fmtDateTime(m.last_taken))}${m.last_taken_by ? " by " + esc(m.last_taken_by) : ""}</div>
-            ${m.as_needed ? "" : `<div class="sub">Adherence ${esc(m.compliance_percentage)}% · ${esc(m.missed_doses)} missed</div>`}
-            <div class="actions" style="margin-top:12px">
-              <button class="btn secondary" data-action="refill" data-id="${esc(m.medication_id)}">Add stock</button>
-              ${admin ? `<button class="btn secondary" data-action="edit" data-id="${esc(m.medication_id)}">Edit</button>
-              <button class="btn danger" data-action="delete" data-id="${esc(m.medication_id)}">Delete</button>` : ""}
-            </div></div>`;
+      const people = new Map();
+      for (const m of s.medications) people.set(m.profile_id, m.profile_name);
+      for (const g of s.groups || []) people.set(g.profile_id, g.profile_name);
+      const tip =
+        admin && (s.medications.length > 1 || (s.groups || []).length)
+          ? `<div class="hint">Drag <b>⠿</b> to put medications into groups or change the order. A group gets one reminder and one tick-all button, but every medication is still tracked on its own.</div>`
+          : "";
+      const sections = [...people.entries()]
+        .sort((a, b) => a[1].localeCompare(b[1]))
+        .map(([pid, name]) => {
+          const meds = s.medications.filter((m) => m.profile_id === pid);
+          const byId = Object.fromEntries(meds.map((m) => [m.medication_id, m]));
+          const groups = (s.groups || []).filter((g) => g.profile_id === pid).sort((a, b) => a.order - b.order);
+          const groupHtml = groups
+            .map((g) => {
+              const members = (g.member_ids || []).map((id) => byId[id]).filter(Boolean);
+              const days = g.days_of_week && g.days_of_week.length ? g.days_of_week.map((d) => DAYS[d]).join(", ") : "every day";
+              const handle = admin
+                ? `<button class="handle" data-drag="group" data-id="${esc(g.group_id)}" aria-label="Move group ${esc(g.name)}. Drag, or use the up and down arrow keys to reorder" title="Drag to reorder">⠿</button>`
+                : "";
+              return `<div class="gcard" data-row="group" data-id="${esc(g.group_id)}" data-profile="${esc(pid)}" data-label="${esc(g.name)}">
+                <div class="mrow first" style="padding-top:0">${handle}
+                  <div class="grow"><strong>${esc(g.name)}</strong> <span class="sub">⏰ ${esc(g.schedules.join(", "))} · ${esc(g.interval_days > 1 ? "every " + g.interval_days + " days" : days)} · ${members.length} item${members.length === 1 ? "" : "s"}${g.notification_enabled ? "" : " · reminders off"}${g.nfc_tag_id ? " · 🏷 tag" : ""}</span></div>
+                  ${admin ? `<button class="btn secondary" data-action="edit-group" data-id="${esc(g.group_id)}">Edit group</button>` : ""}</div>
+                <div class="zone" data-zone="${esc(g.group_id)}" data-profile="${esc(pid)}"><div class="zonebody">${
+                  members.length ? members.map((m, i) => this._medRow(m, i === 0)).join("") : '<div class="emptyhint">Drag medications here</div>'
+                }</div></div></div>`;
+            })
+            .join("");
+          const loose = meds
+            .filter((m) => !m.group_id && !m.as_needed)
+            .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.medication_name.localeCompare(b.medication_name));
+          const prn = meds.filter((m) => m.as_needed);
+          const showZone = loose.length || groups.length;
+          return `<div class="card"><h2>${esc(name)}</h2>
+            ${groups.length ? `<div data-grouplist data-profile="${esc(pid)}">${groupHtml}</div>` : ""}
+            ${
+              showZone
+                ? `${groups.length ? '<div class="sub" style="margin:4px 0">Own reminder (not in a group)</div>' : ""}<div class="zone ungrouped" data-zone="" data-profile="${esc(pid)}"><div class="zonebody">${
+                    loose.length ? loose.map((m, i) => this._medRow(m, i === 0)).join("") : '<div class="emptyhint">Drag here to take a medication out of its group</div>'
+                  }</div></div>`
+                : ""
+            }
+            ${prn.length ? `<div class="sub" style="margin:12px 0 4px">As needed</div>${prn.map((m, i) => this._medRow(m, i === 0)).join("")}` : ""}
+          </div>`;
         })
         .join("");
-      return header + cards;
+      return header + tip + sections;
+    }
+
+    _groupOptions(groups, selected, blankLabel) {
+      return (
+        `<option value="">${esc(blankLabel)}</option>` +
+        groups.map((g) => `<option value="${esc(g.group_id)}" ${g.group_id === selected ? "selected" : ""}>${esc(g.name)} (${esc(g.schedules.join(", "))})</option>`).join("")
+      );
+    }
+
+    _quickGroupOptions(groups, selected) {
+      return (
+        `<option value="new" ${selected === "new" ? "selected" : ""}>A new group…</option>` +
+        groups.map((g) => `<option value="${esc(g.group_id)}" ${g.group_id === selected ? "selected" : ""}>${esc(g.name)} (${esc(g.schedules.join(", "))})</option>`).join("") +
+        `<option value="" ${selected === "" ? "selected" : ""}>No group (each gets its own reminder)</option>`
+      );
+    }
+
+    _memberListHtml() {
+      const f = this._gform;
+      const pid = this._profileIdByName(f.profile_name);
+      const meds = this._state.medications.filter((m) => m.profile_id === pid && !m.as_needed);
+      if (!meds.length) return '<div class="sub">No medications for this person yet. Add some first, or use Quick add.</div>';
+      return meds
+        .map((m) => {
+          const other = m.group_id && m.group_id !== f.group_id ? (this._state.groups || []).find((g) => g.group_id === m.group_id) : null;
+          return `<label><input type="checkbox" data-member="${esc(m.medication_id)}" ${f.member_ids.includes(m.medication_id) ? "checked" : ""}> ${esc(m.medication_name)} <span class="sub">${esc(m.dosage)}${other ? ` · currently in ${esc(other.name)}` : ""}</span></label>`;
+        })
+        .join("");
+    }
+
+    _timesAndDays(f) {
+      const times = f.schedules
+        .map(
+          (t, i) => `<span><input type="time" value="${esc(t)}" data-time="${i}">${
+            f.schedules.length > 1 ? `<button class="btn danger" style="padding:4px 10px" data-action="remove-time" data-index="${i}" aria-label="Remove time">×</button>` : ""
+          }</span>`
+        )
+        .join("");
+      const days = DAYS.map(
+        (label, i) => `<label><input type="checkbox" data-day="${i}" ${f.days.includes(i) ? "checked" : ""}><span>${label}</span></label>`
+      ).join("");
+      return `<div class="times">${times}<button class="btn secondary" data-action="add-time">+ Add time</button></div>
+        <div class="days" style="margin-top:12px">${days}</div>`;
+    }
+
+    _renderGroupForm() {
+      const f = this._gform;
+      const editing = !!f.group_id;
+      const profiles = Object.values(this._state.profiles || {});
+      const defaultNotify = this._state.settings.default_notify_service;
+      const scanning = this._scan ? `<div class="banner">Hold your phone to the NFC tag now… <button class="btn secondary" data-action="stop-scan">Cancel</button></div>` : "";
+      return `<div class="card"><h2>${editing ? "Edit group" : "New group"}</h2>
+        <div class="sub" style="margin-bottom:12px">Everything in a group is reminded together in one notification, with one button to tick it all off. Each medication is still tracked individually.</div>
+        <datalist id="profiles">${profiles.map((p) => `<option value="${esc(p)}">`).join("")}</datalist>
+        <div class="grid">
+          <label class="field">Group name<input data-field="name" value="${esc(f.name)}" placeholder="e.g. Morning vitamins"></label>
+          <label class="field">Who is it for?<input data-field="profile_name" value="${esc(f.profile_name)}" list="profiles" placeholder="e.g. Mike"></label>
+        </div>
+        <h2 style="margin-top:16px">When</h2>
+        ${this._timesAndDays(f)}
+        <div class="grid" style="margin-top:12px">
+          <label class="field">Repeat every N days (1 = daily)<input type="number" min="1" max="30" data-field="interval_days" value="${esc(f.interval_days)}"></label>
+          <label class="field">First day (only for every-N-days)<input type="date" data-field="anchor_date" value="${esc(f.anchor_date)}"></label>
+        </div>
+        <h2 style="margin-top:16px">What's in it</h2>
+        <div class="memberlist">${this._memberListHtml()}</div>
+        <h2 style="margin-top:16px">Taking it</h2>
+        ${scanning}
+        <div class="grid">
+          <label class="field">NFC tag ID (optional, ticks the whole group)<span style="display:flex;gap:6px"><input style="flex:1" data-field="nfc_tag_id" value="${esc(f.nfc_tag_id)}" placeholder="scan or paste"><button class="btn secondary" data-action="scan-form" type="button">Scan</button></span></label>
+          <label class="field">Phone to notify<select data-field="notify_service">${this._notifyOptions(f.notify_service, defaultNotify ? `Use default (${defaultNotify})` : "Use default (set in Settings)")}</select></label>
+        </div>
+        <label class="field" style="margin-top:12px;flex-direction:row;align-items:center;gap:8px"><input type="checkbox" data-field="notification_enabled" ${f.notification_enabled ? "checked" : ""}> Send reminders</label>
+        <div class="actions" style="margin-top:20px">
+          <button class="btn big" data-action="save-group">Save group</button>
+          <button class="btn secondary big" data-action="cancel">Cancel</button>
+          ${editing ? `<button class="btn danger" data-action="delete-group" data-id="${esc(f.group_id)}">Delete group</button>` : ""}
+        </div></div>`;
+    }
+
+    _renderQuick() {
+      const f = this._quick;
+      const profiles = Object.values(this._state.profiles || {});
+      const groups = this._groupsFor(f.profile_name);
+      const needsTimes = f.group_choice === "new" || f.group_choice === "";
+      const times = f.schedules
+        .map(
+          (t, i) => `<span><input type="time" value="${esc(t)}" data-time="${i}">${
+            f.schedules.length > 1 ? `<button class="btn danger" style="padding:4px 10px" data-action="remove-time" data-index="${i}" aria-label="Remove time">×</button>` : ""
+          }</span>`
+        )
+        .join("");
+      return `<div class="card"><h2>Quick add several</h2>
+        <div class="sub" style="margin-bottom:12px">Type one medication or supplement per line. Add the dose after a comma if you like, for example <code>Vitamin D, 1000 IU</code>.</div>
+        <datalist id="profiles">${profiles.map((p) => `<option value="${esc(p)}">`).join("")}</datalist>
+        <div class="grid">
+          <label class="field">Who are they for?<input data-field="profile_name" value="${esc(f.profile_name)}" list="profiles" placeholder="e.g. Mike"></label>
+          <label class="field">Put them in<select data-field="group_choice">${this._quickGroupOptions(groups, f.group_choice)}</select></label>
+          ${f.group_choice === "new" ? `<label class="field">New group name<input data-field="new_name" value="${esc(f.new_name)}" placeholder="e.g. Morning vitamins"></label>` : ""}
+        </div>
+        ${needsTimes ? `<h2 style="margin-top:16px">At what time${f.group_choice === "" ? " (each gets its own reminder)" : ""}?</h2><div class="times">${times}<button class="btn secondary" data-action="add-time">+ Add time</button></div>` : ""}
+        <label class="field" style="margin-top:16px">Medications<textarea data-field="text" placeholder="Vitamin D, 1000 IU&#10;Magnesium, 200 mg&#10;Zinc&#10;Omega 3, 2 capsules">${esc(f.text)}</textarea></label>
+        <div class="actions" style="margin-top:20px">
+          <button class="btn big" data-action="save-quick">Add them</button>
+          <button class="btn secondary big" data-action="cancel">Cancel</button>
+        </div></div>`;
     }
 
     _notifyOptions(selected, blankLabel) {
@@ -742,12 +1383,19 @@
           ${field("profile_name", "Who is it for?", 'list="profiles" placeholder="e.g. Mike"')}
           ${field("medication_name", "Medication", 'list="meds" placeholder="e.g. Vitamin D"')}
           ${field("dosage", "Dose", 'placeholder="e.g. 1 tablet"')}
+          ${
+            f.as_needed
+              ? ""
+              : `<label class="field">Group (shares one reminder)<select data-field="group_id">${this._groupOptions(this._groupsFor(f.profile_name), f.group_id, "No group")}</select></label>`
+          }
         </div>
         <h2 style="margin-top:16px">When</h2>
         <label class="field" style="flex-direction:row;align-items:center;gap:8px;margin-bottom:8px"><input type="checkbox" data-field="as_needed" ${f.as_needed ? "checked" : ""}> As needed (no fixed times, e.g. paracetamol)</label>
         ${
           f.as_needed
             ? `<div class="grid">${field("max_doses_per_day", "Most doses per day (blank = no limit)", 'type="number" min="0" max="48"')}</div>`
+            : f.group_id
+            ? `<div class="hint">This medication uses the times of its group, so it is reminded together with the others. Choose "No group" above to give it its own times.</div>`
             : `<div class="times">${times}<button class="btn secondary" data-action="add-time">+ Add time</button></div>
         <div class="days" style="margin-top:12px">${days}</div>
         <div class="grid" style="margin-top:12px">

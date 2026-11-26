@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "medication_tracker"
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 PLATFORMS = ["binary_sensor", "button", "calendar", "sensor"]
 STORAGE_KEY = DOMAIN
 STORAGE_VERSION = 1
@@ -23,6 +23,9 @@ ACTION_CONFIRMED_PREFIX = "MEDICATION_CONFIRMED_"
 ACTION_ALL_PREFIX = "MEDICATION_ALL_"
 ACTION_SNOOZE_PREFIX = "MEDICATION_SNOOZE_"
 ACTION_SKIP_PREFIX = "MEDICATION_SKIP_"
+ACTION_GROUP_PREFIX = "MEDICATION_GROUP_"  # take everything due in a group
+ACTION_GROUP_SNOOZE_PREFIX = "MEDICATION_GROUPSNOOZE_"
+ACTION_SNOOZE_ALL_PREFIX = "MEDICATION_SNOOZEALL_"  # snooze everything due for a person
 
 # Sidebar panel and static assets.
 PANEL_URL_PATH = "medication-tracker"
@@ -112,6 +115,7 @@ ATTR_DAYS_OF_WEEK = "days_of_week"
 ATTR_REPEAT_EVERY_MINUTES = "repeat_every_minutes"
 ATTR_MAX_REPEATS = "max_repeats"
 ATTR_PROFILE_IDS = "profile_ids"
+ATTR_GROUP_ID = "group_id"
 
 DEFAULT_SCAN_INTERVAL_MINUTES = 1
 DEFAULT_REMINDER_MINUTES = 15

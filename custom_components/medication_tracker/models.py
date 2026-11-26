@@ -37,6 +37,61 @@ class DoseLog:
 
 
 @dataclass(slots=True)
+class Group:
+    """A named set of medications taken together (one schedule, one notification)."""
+
+    group_id: str
+    profile_id: str
+    profile_name: str
+    name: str
+    schedules: list[str]
+    days_of_week: list[int] | None = None
+    interval_days: int = 1
+    anchor_date: date | None = None
+    notify_service: str | None = None
+    nfc_tag_id: str | None = None
+    notification_enabled: bool = True
+    order: int = 0
+
+    def as_dict(self) -> dict[str, Any]:
+        """Serialize a group."""
+        return {
+            "group_id": self.group_id,
+            "profile_id": self.profile_id,
+            "profile_name": self.profile_name,
+            "name": self.name,
+            "schedules": self.schedules,
+            "days_of_week": self.days_of_week,
+            "interval_days": self.interval_days,
+            "anchor_date": self.anchor_date.isoformat() if self.anchor_date else None,
+            "notify_service": self.notify_service,
+            "nfc_tag_id": self.nfc_tag_id,
+            "notification_enabled": self.notification_enabled,
+            "order": self.order,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Group":
+        """Create a group from storage data."""
+        return cls(
+            group_id=data["group_id"],
+            profile_id=data["profile_id"],
+            profile_name=data["profile_name"],
+            name=data["name"],
+            schedules=list(data.get("schedules", [])),
+            days_of_week=(
+                sorted({int(day) for day in data["days_of_week"]}) if data.get("days_of_week") else None
+            ),
+            interval_days=max(int(data.get("interval_days", 1) or 1), 1),
+            anchor_date=date.fromisoformat(data["anchor_date"]) if data.get("anchor_date") else None,
+            notify_service=data.get("notify_service"),
+            nfc_tag_id=data.get("nfc_tag_id"),
+            notification_enabled=bool(data.get("notification_enabled", True)),
+            order=int(data.get("order", 0) or 0),
+        )
+
+
+@dataclass(slots=True)
 class Medication:
     """Medication record."""
 
@@ -73,6 +128,8 @@ class Medication:
     anchor_date: date | None = None
     escalate_after_minutes: int = 0
     last_escalation_notification: str | None = None
+    group_id: str | None = None
+    sort_order: int = 0
     created_at: str | None = None
     last_due_sent_at: str | None = None
     due_repeat_count: int = 0
@@ -121,6 +178,8 @@ class Medication:
             "anchor_date": self.anchor_date.isoformat() if self.anchor_date else None,
             "escalate_after_minutes": self.escalate_after_minutes,
             "last_escalation_notification": self.last_escalation_notification,
+            "group_id": self.group_id,
+            "sort_order": self.sort_order,
             "created_at": self.created_at,
             "last_due_sent_at": self.last_due_sent_at,
             "due_repeat_count": self.due_repeat_count,
@@ -175,6 +234,8 @@ class Medication:
             anchor_date=date.fromisoformat(data["anchor_date"]) if data.get("anchor_date") else None,
             escalate_after_minutes=int(data.get("escalate_after_minutes", 0) or 0),
             last_escalation_notification=data.get("last_escalation_notification"),
+            group_id=data.get("group_id"),
+            sort_order=int(data.get("sort_order", 0) or 0),
             created_at=data.get("created_at"),
             last_due_sent_at=data.get("last_due_sent_at"),
             due_repeat_count=data.get("due_repeat_count", 0),
