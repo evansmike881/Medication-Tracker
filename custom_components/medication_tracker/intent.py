@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import intent
 
 from .const import DOMAIN
+from .runtime import async_take, async_take_all
 
 
 async def async_register_intents(hass: HomeAssistant) -> None:
@@ -19,6 +20,7 @@ async def async_register_intents(hass: HomeAssistant) -> None:
     intent.async_register(hass, MedicationLogIntent(hass))
     intent.async_register(hass, MedicationDueIntent(hass))
     intent.async_register(hass, MedicationRefillIntent(hass))
+    intent.async_register(hass, MedicationLogAllIntent(hass))
     hass.data[DOMAIN]["intents_registered"] = True
 
 
@@ -184,11 +186,38 @@ class MedicationLogIntent(MedicationBaseIntent):
                 response.async_set_speech(f"I could not find a medication called {medication_name}.")
             return response
 
-        runtime_data = self._runtime_data
-        await runtime_data["manager"].async_log_dose(medication.medication_id, source="assist")
-        runtime_data["alert_engine"].dismiss_for_medication(medication.medication_id)
-        await runtime_data["coordinator"].async_request_refresh()
+        await async_take(self.hass, medication.medication_id, source="assist")
         response.async_set_speech(f"Logged {medication.name} for {medication.profile_name} as taken.")
+        return response
+
+
+class MedicationLogAllIntent(MedicationBaseIntent):
+    """Mark everything that is due as taken from Assist."""
+
+    intent_type = "MedicationLogAllIntent"
+    slot_schema = {"profile": str}
+
+    async def async_handle(self, intent_obj: intent.Intent) -> intent.IntentResponse:
+        """Handle the intent."""
+        response = intent_obj.create_response()
+        profile_name = self._normalize_slot(intent_obj.slots.get("profile"))
+        profile_id = None
+        if profile_name:
+            for pid, name in self._manager.list_profiles().items():
+                if profile_name.casefold() in name.casefold():
+                    profile_id = pid
+                    break
+            if profile_id is None:
+                response.async_set_speech(f"I could not find a person or pet called {profile_name}.")
+                return response
+
+        result = await async_take_all(self.hass, profile_id=profile_id, source="assist")
+        count = len(result["logged"])
+        if count == 0:
+            response.async_set_speech("Nothing is due right now.")
+        else:
+            names = ", ".join(self._manager.medications[m].name for m in result["logged"])
+            response.async_set_speech(f"Marked {count} as taken: {names}.")
         return response
 
 

@@ -60,6 +60,12 @@ class Medication:
     reminder_minutes: int = 15
     missed_after_minutes: int = 60
     duplicate_guard_minutes: int = 0
+    repeat_every_minutes: int = 5
+    max_repeats: int = 2
+    days_of_week: list[int] | None = None
+    created_at: str | None = None
+    last_due_sent_at: str | None = None
+    due_repeat_count: int = 0
     last_due_notification: str | None = None
     last_missed_notification: str | None = None
     last_refill_notification: str | None = None
@@ -95,6 +101,12 @@ class Medication:
             "reminder_minutes": self.reminder_minutes,
             "missed_after_minutes": self.missed_after_minutes,
             "duplicate_guard_minutes": self.duplicate_guard_minutes,
+            "repeat_every_minutes": self.repeat_every_minutes,
+            "max_repeats": self.max_repeats,
+            "days_of_week": self.days_of_week,
+            "created_at": self.created_at,
+            "last_due_sent_at": self.last_due_sent_at,
+            "due_repeat_count": self.due_repeat_count,
             "last_due_notification": self.last_due_notification,
             "last_missed_notification": self.last_missed_notification,
             "last_refill_notification": self.last_refill_notification,
@@ -132,6 +144,16 @@ class Medication:
             reminder_minutes=data.get("reminder_minutes", 15),
             missed_after_minutes=data.get("missed_after_minutes", 60),
             duplicate_guard_minutes=data.get("duplicate_guard_minutes", 0),
+            repeat_every_minutes=data.get("repeat_every_minutes", 5),
+            max_repeats=data.get("max_repeats", 2),
+            days_of_week=(
+                sorted({int(day) for day in data["days_of_week"]})
+                if data.get("days_of_week")
+                else None
+            ),
+            created_at=data.get("created_at"),
+            last_due_sent_at=data.get("last_due_sent_at"),
+            due_repeat_count=data.get("due_repeat_count", 0),
             last_due_notification=data.get("last_due_notification"),
             last_missed_notification=data.get("last_missed_notification"),
             last_refill_notification=data.get("last_refill_notification"),

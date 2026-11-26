@@ -33,5 +33,8 @@ class MedicationTrackerCoordinator(DataUpdateCoordinator[None]):
 
     async def _async_update_data(self) -> None:
         """Refresh coordinator data."""
-        await self.alert_engine.async_process()
+        try:
+            await self.alert_engine.async_process()
+        except Exception:  # noqa: BLE001 - keep entities available if alerting fails
+            self.logger.exception("Medication alert processing failed")
         return None

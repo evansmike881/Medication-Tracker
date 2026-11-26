@@ -12,6 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import ATTR_MEDICATION_NAME, DOMAIN, SIGNAL_MEDICATIONS_UPDATED
+from .runtime import async_skip, async_snooze, async_take, async_take_all
 
 BUTTON_TYPES: tuple[ButtonEntityDescription, ...] = (
     ButtonEntityDescription(
@@ -84,6 +85,7 @@ async def async_setup_entry(
                 )
         return entities
 
+    async_add_entities([TakeAllDueButton(coordinator, manager)])
     async_add_entities(build_entities())
     entry.async_on_unload(
         async_dispatcher_connect(
@@ -130,24 +132,26 @@ class MedicationActionButton(CoordinatorEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         """Run the configured medication action."""
-        if self.entity_description.key == "log_dose":
-            await self._manager.async_log_dose(self._medication_id)
-            self._alert_engine.dismiss_for_medication(self._medication_id)
-        elif self.entity_description.key == "skip_dose":
-            await self._manager.async_skip_medication_occurrence(self._medication_id)
-            self._alert_engine.dismiss_for_medication(self._medication_id)
-        elif self.entity_description.key == "snooze_10_minutes":
-            await self._manager.async_snooze_medication(self._medication_id, 10)
-            self._alert_engine.dismiss_for_medication(self._medication_id)
-        elif self.entity_description.key == "test_due_notification":
-            await self._alert_engine.async_send_test_alert(self._medication_id, "due")
-        elif self.entity_description.key == "test_missed_notification":
-            await self._alert_engine.async_send_test_alert(self._medication_id, "missed")
-        elif self.entity_description.key == "test_refill_notification":
-            await self._alert_engine.async_send_test_alert(self._medication_id, "refill")
-        elif self.entity_description.key == "test_caregiver_notification":
-            await self._alert_engine.async_send_test_alert(self._medication_id, "caregiver_confirmation")
-        await self.coordinator.async_request_refresh()
+        key = self.entity_description.key
+        if key == "log_dose":
+            await async_take(self.hass, self._medication_id, source="button")
+        elif key == "skip_dose":
+            await async_skip(self.hass, self._medication_id)
+        elif key == "snooze_10_minutes":
+            await async_snooze(self.hass, self._medication_id, 10)
+        elif key.startswith("test_"):
+            alert_type = {
+                "test_due_notification": "due",
+                "test_missed_notification": "missed",
+                "test_refill_notification": "refill",
+                "test_caregiver_notification": "caregiver_confirmation",
+            }[key]
+            delivered = await self._alert_engine.async_send_test_alert(self._medication_id, alert_type)
+            if not delivered:
+                raise HomeAssistantError(
+                    "The phone notification could not be sent. Check the notify service "
+                    "name in Medication Tracker settings (see Settings > Repairs)."
+                )
 
     @property
     def available(self) -> bool:
@@ -161,3 +165,31 @@ class MedicationActionButton(CoordinatorEntity, ButtonEntity):
             return self._manager.get_snapshot(self._medication_id)
         except HomeAssistantError:
             return None
+
+
+class TakeAllDueButton(CoordinatorEntity, ButtonEntity):
+    """Mark everything that is currently due as taken."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Take All Due"
+    _attr_icon = "mdi:pill-multiple"
+
+    def __init__(self, coordinator, manager) -> None:
+        """Initialize the button."""
+        super().__init__(coordinator)
+        self._manager = manager
+        self._attr_unique_id = "summary_take_all_due"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Attach to the summary device."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, "summary")},
+            name="Medication Tracker",
+            manufacturer="Medication Tracker",
+            model="Medication Summary",
+        )
+
+    async def async_press(self) -> None:
+        """Log every outstanding dose."""
+        await async_take_all(self.hass, source="button")

@@ -82,7 +82,11 @@ class MedicationScheduleCalendar(CoordinatorEntity, CalendarEntity):
         for medication in self._manager.list_medications():
             current_date = max(medication.start_date, start_date.date())
             while current_date <= end_date.date():
-                for schedule in medication.schedules:
+                for schedule in (
+                    medication.schedules
+                    if self._manager._is_scheduled_day(medication, current_date)
+                    else []
+                ):
                     occurrence = self._manager._combine(current_date, schedule)
                     if occurrence < start_date or occurrence >= end_date:
                         continue

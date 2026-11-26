@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import defaultdict
 from collections.abc import Iterable
+from copy import deepcopy
 from datetime import date, datetime, time, timedelta
 import math
 from typing import Any
@@ -13,10 +15,51 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
 
-from .const import DEFAULT_MISSED_AFTER_MINUTES, DEFAULT_REMINDER_MINUTES
+from .const import (
+    ACTION_ALL_PREFIX,
+    ACTION_CONFIRMED_PREFIX,
+    ACTION_SKIP_PREFIX,
+    ACTION_SNOOZE_PREFIX,
+    DEFAULT_MAX_REPEATS,
+    DEFAULT_MISSED_AFTER_MINUTES,
+    DEFAULT_REMINDER_MINUTES,
+    DEFAULT_REPEAT_EVERY_MINUTES,
+    DEFAULT_SETTINGS,
+    EARLY_WINDOW_MINUTES,
+    SETTING_ALL_TAG_IDS,
+    SETTING_DEFAULT_NOTIFY,
+    SETTING_FALLBACK_NOTIFY,
+    SETTING_PROFILE_TAGS,
+)
 from .medication_database import MedicationDatabase
 from .models import DoseLog, Medication
 from .store import MedicationTrackerStore
+
+# How long after a scheduled time a "take all" or tag scan still counts as that dose.
+LATE_WINDOW = timedelta(hours=12)
+
+STATUS_TAKEN = "Taken"
+STATUS_SKIPPED = "Skipped"
+STATUS_MISSED = "Missed Dose"
+STATUS_SNOOZED = "Snoozed"
+STATUS_DUE = "Due Now"
+STATUS_ON_TRACK = "On Track"
+
+
+class _MatchState:
+    """Scheduled occurrences, their dose windows and which ones have a dose."""
+
+    __slots__ = ("occurrences", "window_starts", "matched")
+
+    def __init__(
+        self,
+        occurrences: list[datetime],
+        window_starts: list[datetime],
+        matched: set[datetime],
+    ) -> None:
+        self.occurrences = occurrences
+        self.window_starts = window_starts
+        self.matched = matched
 
 
 class MedicationTrackerManager:
@@ -28,11 +71,16 @@ class MedicationTrackerManager:
         self.store = MedicationTrackerStore(hass)
         self.database = MedicationDatabase()
         self.medications: dict[str, Medication] = {}
+        self.settings: dict[str, Any] = deepcopy(DEFAULT_SETTINGS)
 
     async def async_initialize(self) -> None:
         """Load persisted state."""
         self.database = await MedicationDatabase.async_load(self.hass)
-        self.medications = await self.store.async_load()
+        self.medications, self.settings = await self.store.async_load_all()
+
+    # ------------------------------------------------------------------
+    # Medication CRUD
+    # ------------------------------------------------------------------
 
     async def async_add_medication(
         self,
@@ -60,9 +108,13 @@ class MedicationTrackerManager:
         reminder_minutes: int = DEFAULT_REMINDER_MINUTES,
         missed_after_minutes: int = DEFAULT_MISSED_AFTER_MINUTES,
         duplicate_guard_minutes: int = 0,
+        repeat_every_minutes: int | None = None,
+        max_repeats: int | None = None,
+        days_of_week: list[int] | None = None,
     ) -> Medication:
         """Create or update a medication."""
         normalized_schedules = self._normalize_schedules(schedules)
+        normalized_days = self._normalize_days(days_of_week)
         existing = self.medications.get(medication_id)
         database_entry = self.database.get(database_entry_id) if database_entry_id else None
         computed_purpose = purpose or (database_entry.get("purpose", "") if database_entry else "")
@@ -73,6 +125,15 @@ class MedicationTrackerManager:
             if strength_options is not None
             else list(database_entry.get("strength_options", [])) if database_entry else []
         )
+        if repeat_every_minutes is None:
+            repeat_every_minutes = existing.repeat_every_minutes if existing else DEFAULT_REPEAT_EVERY_MINUTES
+        if max_repeats is None:
+            max_repeats = existing.max_repeats if existing else DEFAULT_MAX_REPEATS
+        # None keeps the stored value, an empty string clears it.
+        if caregiver_name is None:
+            caregiver_name = existing.caregiver_name if existing else None
+        if caregiver_notify_service is None:
+            caregiver_notify_service = existing.caregiver_notify_service if existing else None
         medication = Medication(
             medication_id=medication_id,
             profile_id=profile_id,
@@ -91,24 +152,93 @@ class MedicationTrackerManager:
             nfc_tag_id=nfc_tag_id or None,
             notification_enabled=notification_enabled,
             notify_service=notify_service or None,
-            caregiver_name=caregiver_name or (existing.caregiver_name if existing else None),
-            caregiver_notify_service=caregiver_notify_service or (existing.caregiver_notify_service if existing else None),
+            caregiver_name=caregiver_name or None,
+            caregiver_notify_service=caregiver_notify_service or None,
             confirmation_required=confirmation_required,
             reminder_minutes=reminder_minutes,
             missed_after_minutes=missed_after_minutes,
             duplicate_guard_minutes=duplicate_guard_minutes,
+            repeat_every_minutes=max(int(repeat_every_minutes), 0),
+            max_repeats=max(int(max_repeats), 0),
+            days_of_week=normalized_days,
+            created_at=existing.created_at if existing else dt_util.now().isoformat(),
+            last_due_sent_at=existing.last_due_sent_at if existing else None,
+            due_repeat_count=existing.due_repeat_count if existing else 0,
             last_due_notification=existing.last_due_notification if existing else None,
             last_missed_notification=existing.last_missed_notification if existing else None,
             last_refill_notification=existing.last_refill_notification if existing else None,
             last_caregiver_notification=existing.last_caregiver_notification if existing else None,
             snoozed_until=existing.snoozed_until if existing else None,
             skipped_occurrences=list(existing.skipped_occurrences) if existing else [],
-            start_date=existing.start_date if existing else date.today(),
+            start_date=existing.start_date if existing else dt_util.now().date(),
             dose_logs=list(existing.dose_logs) if existing else [],
         )
         self.medications[medication_id] = medication
         await self._async_save()
         return medication
+
+    async def async_remove_medication(self, medication_id: str) -> None:
+        """Remove a medication."""
+        self._get_medication(medication_id)
+        self.medications.pop(medication_id)
+        await self._async_save()
+
+    async def async_reset_history(self, medication_id: str) -> Medication:
+        """Start the medication's history fresh, e.g. after a long break."""
+        medication = self._get_medication(medication_id)
+        now = dt_util.now()
+        medication.start_date = now.date()
+        medication.created_at = now.isoformat()
+        medication.skipped_occurrences = []
+        medication.last_due_notification = None
+        medication.last_missed_notification = None
+        medication.last_caregiver_notification = None
+        medication.last_due_sent_at = None
+        medication.due_repeat_count = 0
+        medication.snoozed_until = None
+        await self._async_save()
+        return medication
+
+    async def async_refill_medication(self, medication_id: str, quantity: float) -> Medication:
+        """Add remaining quantity."""
+        medication = self._get_medication(medication_id)
+        current_quantity = medication.quantity or 0
+        medication.quantity = current_quantity + quantity
+        medication.last_refill_notification = None
+        await self._async_save()
+        return medication
+
+    # ------------------------------------------------------------------
+    # Doses
+    # ------------------------------------------------------------------
+
+    def _apply_dose(
+        self,
+        medication: Medication,
+        timestamp: datetime,
+        source: str,
+        confirmed_by: str | None,
+        allow_duplicate: bool,
+    ) -> None:
+        """Record a dose in memory without saving."""
+        if _is_naive_datetime(timestamp):
+            timestamp = dt_util.as_local(dt_util.as_utc(timestamp))
+        if not allow_duplicate:
+            self._validate_duplicate_guard(medication, timestamp)
+        medication.dose_logs.append(
+            DoseLog(taken_at=timestamp, source=source, confirmed_by=confirmed_by)
+        )
+        medication.dose_logs.sort(key=lambda item: item.taken_at)
+
+        if medication.quantity is not None:
+            medication.quantity = max(medication.quantity - 1, 0)
+
+        medication.last_due_notification = None
+        medication.last_missed_notification = None
+        medication.last_caregiver_notification = None
+        medication.last_due_sent_at = None
+        medication.due_repeat_count = 0
+        medication.snoozed_until = None
 
     async def async_log_dose(
         self,
@@ -121,48 +251,66 @@ class MedicationTrackerManager:
         """Log a dose for a medication."""
         medication = self._get_medication(medication_id)
         timestamp = taken_at or dt_util.now()
-        if _is_naive_datetime(timestamp):
-            timestamp = dt_util.as_local(dt_util.as_utc(timestamp))
-        if not allow_duplicate:
-            self._validate_duplicate_guard(medication, timestamp)
-        medication.dose_logs.append(
-            DoseLog(
-                taken_at=timestamp,
-                source=source,
-                confirmed_by=confirmed_by,
-            )
-        )
-        medication.dose_logs.sort(key=lambda item: item.taken_at)
-
-        if medication.quantity is not None:
-            medication.quantity = max(medication.quantity - 1, 0)
-
-        medication.last_due_notification = None
-        medication.last_missed_notification = None
-        medication.last_caregiver_notification = None
-        medication.snoozed_until = None
+        self._apply_dose(medication, timestamp, source, confirmed_by, allow_duplicate)
         await self._async_save()
         return medication
 
-    async def async_refill_medication(self, medication_id: str, quantity: float) -> Medication:
-        """Add remaining quantity."""
+    async def async_log_outstanding(
+        self,
+        *,
+        profile_id: str | None = None,
+        medication_ids: Iterable[str] | None = None,
+        source: str = "manual",
+        confirmed_by: str | None = None,
+    ) -> dict[str, list[str]]:
+        """Log one dose for every medication that is currently due or overdue.
+
+        Returns the ids that were logged and the ids a duplicate-dose guard blocked.
+        """
+        now = dt_util.now()
+        wanted = set(medication_ids) if medication_ids is not None else None
+        logged: list[str] = []
+        blocked: list[str] = []
+        for medication in list(self.medications.values()):
+            if profile_id and medication.profile_id != profile_id:
+                continue
+            if wanted is not None and medication.medication_id not in wanted:
+                continue
+            if self._outstanding_occurrence(medication, now) is None:
+                continue
+            try:
+                self._apply_dose(medication, now, source, confirmed_by, allow_duplicate=False)
+            except HomeAssistantError:
+                blocked.append(medication.medication_id)
+                continue
+            logged.append(medication.medication_id)
+        if logged:
+            await self._async_save()
+        return {"logged": logged, "blocked": blocked}
+
+    async def async_delete_dose(self, medication_id: str, taken_at: str) -> Medication:
+        """Delete a logged dose (for example one logged by mistake)."""
         medication = self._get_medication(medication_id)
-        current_quantity = medication.quantity or 0
-        medication.quantity = current_quantity + quantity
-        await self._async_save()
-        return medication
-
-    async def async_remove_medication(self, medication_id: str) -> None:
-        """Remove a medication."""
-        self._get_medication(medication_id)
-        self.medications.pop(medication_id)
-        await self._async_save()
+        target = datetime.fromisoformat(taken_at)
+        for index, dose_log in enumerate(medication.dose_logs):
+            if dose_log.taken_at == target or dose_log.taken_at.isoformat() == taken_at:
+                medication.dose_logs.pop(index)
+                if medication.quantity is not None:
+                    medication.quantity += 1
+                medication.last_due_notification = None
+                medication.last_missed_notification = None
+                medication.last_caregiver_notification = None
+                await self._async_save()
+                return medication
+        raise HomeAssistantError("That dose log entry was not found.")
 
     async def async_snooze_medication(self, medication_id: str, minutes: int) -> Medication:
         """Snooze a medication reminder for a number of minutes."""
         medication = self._get_medication(medication_id)
         medication.snoozed_until = (dt_util.now() + timedelta(minutes=minutes)).isoformat()
         medication.last_due_notification = None
+        medication.last_due_sent_at = None
+        medication.due_repeat_count = 0
         await self._async_save()
         return medication
 
@@ -173,9 +321,12 @@ class MedicationTrackerManager:
     ) -> Medication:
         """Skip the next or supplied scheduled occurrence for a medication."""
         medication = self._get_medication(medication_id)
-        occurrence = scheduled_time or self._current_due_schedule(medication, dt_util.now()) or self._next_scheduled_dose(
-            medication,
-            dt_util.now(),
+        now = dt_util.now()
+        occurrence = (
+            scheduled_time
+            or self._outstanding_occurrence(medication, now)
+            or self._current_due_schedule(medication, now)
+            or self._next_scheduled_dose(medication, now)
         )
         if occurrence is None:
             raise HomeAssistantError("No scheduled occurrence is available to skip.")
@@ -190,9 +341,42 @@ class MedicationTrackerManager:
         await self._async_save()
         return medication
 
+    # ------------------------------------------------------------------
+    # Settings and lookups
+    # ------------------------------------------------------------------
+
+    async def async_update_settings(self, updates: dict[str, Any]) -> dict[str, Any]:
+        """Validate and store integration-wide settings."""
+        for key, value in updates.items():
+            if key not in DEFAULT_SETTINGS:
+                raise HomeAssistantError(f"Unknown setting: {key}")
+            if key in (SETTING_DEFAULT_NOTIFY, SETTING_FALLBACK_NOTIFY):
+                self.settings[key] = value or None
+            elif key == SETTING_ALL_TAG_IDS:
+                self.settings[key] = sorted({str(tag).strip() for tag in (value or []) if str(tag).strip()})
+            elif key == SETTING_PROFILE_TAGS:
+                self.settings[key] = {
+                    str(tag).strip(): str(profile)
+                    for tag, profile in (value or {}).items()
+                    if str(tag).strip() and profile
+                }
+        await self._async_save()
+        return self.settings
+
+    def resolve_notify_service(self, medication: Medication, caregiver: bool = False) -> str | None:
+        """Return the notify service to use for a medication."""
+        if caregiver and medication.caregiver_notify_service:
+            return medication.caregiver_notify_service
+        return medication.notify_service or self.settings.get(SETTING_DEFAULT_NOTIFY)
+
     def list_medications(self) -> Iterable[Medication]:
         """Return all medications."""
         return self.medications.values()
+
+    def list_profiles(self) -> dict[str, str]:
+        """Return profile names keyed by profile id."""
+        profiles = {medication.profile_id: medication.profile_name for medication in self.medications.values()}
+        return dict(sorted(profiles.items(), key=lambda item: item[1].lower()))
 
     def list_database_entries(self) -> list[dict[str, Any]]:
         """Return bundled medication catalog entries."""
@@ -209,17 +393,37 @@ class MedicationTrackerManager:
                 return medication
         return None
 
+    def resolve_tag(self, tag_id: str) -> tuple[str, Any] | None:
+        """Work out what a scanned NFC tag should do.
+
+        Returns ("medication", Medication), ("profile", profile_id), ("all", None) or None.
+        """
+        medication = self.get_by_tag(tag_id)
+        if medication is not None:
+            return "medication", medication
+        profile_id = self.settings.get(SETTING_PROFILE_TAGS, {}).get(tag_id)
+        if profile_id:
+            return "profile", profile_id
+        if tag_id in self.settings.get(SETTING_ALL_TAG_IDS, []):
+            return "all", None
+        return None
+
+    # ------------------------------------------------------------------
+    # Snapshots
+    # ------------------------------------------------------------------
+
     def get_snapshot(self, medication_id: str) -> dict[str, Any]:
         """Return a computed status snapshot."""
         medication = self._get_medication(medication_id)
         now = dt_util.now()
         today = now.date()
+        state = self._match_state(medication, now)
         schedule_occurrences = [
             occurrence
-            for occurrence in self._scheduled_occurrences(medication, medication.start_date, today)
-            if occurrence.isoformat() not in medication.skipped_occurrences
+            for occurrence in state.occurrences
+            if occurrence.date() <= today and occurrence.isoformat() not in medication.skipped_occurrences
         ]
-        matched_occurrences = self._matched_occurrences(medication, schedule_occurrences)
+        matched_occurrences = [occurrence for occurrence in schedule_occurrences if occurrence in state.matched]
         past_due_today = [
             scheduled
             for scheduled in schedule_occurrences
@@ -228,14 +432,19 @@ class MedicationTrackerManager:
         taken_today = [
             scheduled
             for scheduled in matched_occurrences
-            if scheduled.date() == today and scheduled <= now
+            if scheduled.date() == today
         ]
         last_dose = medication.dose_logs[-1].taken_at if medication.dose_logs else None
         last_confirmed_by = medication.dose_logs[-1].confirmed_by if medication.dose_logs else None
         next_dose = self._next_scheduled_dose(medication, now)
-        missed_doses = self._missed_doses(medication, now, matched_occurrences)
-        total_scheduled = len(schedule_occurrences)
+        missed_doses = self._missed_doses(medication, now, state)
+        recent_missed = self._recent_missed(medication, now, state)
+        total_scheduled = len(
+            [occurrence for occurrence in schedule_occurrences if self._past_missed_threshold(medication, occurrence, now)]
+            + [occurrence for occurrence in matched_occurrences if not self._past_missed_threshold(medication, occurrence, now)]
+        )
         compliance = round((len(matched_occurrences) / total_scheduled) * 100, 1) if total_scheduled else 100.0
+        compliance = min(compliance, 100.0)
         days_remaining = self._days_remaining(medication)
         caregiver_confirmation_needed = bool(
             medication.confirmation_required
@@ -246,6 +455,7 @@ class MedicationTrackerManager:
         stock_depletion_date = self._stock_depletion_date(medication, now)
         snoozed_until = self._active_snoozed_until(medication, now)
         duplicate_dose_warning = self._duplicate_dose_warning(medication, now)
+        outstanding = self._outstanding_occurrence(medication, now, state)
 
         return {
             "medication_id": medication.medication_id,
@@ -260,11 +470,13 @@ class MedicationTrackerManager:
             "form": medication.form,
             "strength_options": medication.strength_options,
             "schedules": medication.schedules,
+            "days_of_week": medication.days_of_week,
             "dose_count": len(medication.dose_logs),
             "last_taken": last_dose.isoformat() if last_dose else None,
             "last_confirmed_by": last_confirmed_by,
             "next_dose": next_dose.isoformat() if next_dose else None,
             "missed_doses": missed_doses,
+            "recent_missed": recent_missed,
             "remaining_quantity": medication.quantity,
             "refill_at": medication.refill_at,
             "days_remaining": days_remaining,
@@ -273,6 +485,7 @@ class MedicationTrackerManager:
             "taken_today": len(taken_today),
             "notification_enabled": medication.notification_enabled,
             "notify_service": medication.notify_service,
+            "effective_notify_service": self.resolve_notify_service(medication),
             "caregiver_name": medication.caregiver_name,
             "caregiver_notify_service": medication.caregiver_notify_service,
             "confirmation_required": medication.confirmation_required,
@@ -281,13 +494,17 @@ class MedicationTrackerManager:
             "database_entry_id": medication.database_entry_id,
             "reminder_minutes": medication.reminder_minutes,
             "missed_after_minutes": medication.missed_after_minutes,
+            "repeat_every_minutes": medication.repeat_every_minutes,
+            "max_repeats": medication.max_repeats,
             "duplicate_guard_minutes": medication.duplicate_guard_minutes,
             "duplicate_dose_warning": duplicate_dose_warning,
             "snoozed_until": snoozed_until.isoformat() if snoozed_until else None,
             "skipped_occurrences": medication.skipped_occurrences,
             "stock_depletion_date": stock_depletion_date.isoformat() if stock_depletion_date else None,
             "stock_status": self._stock_status(medication, now, stock_depletion_date),
-            "due_now": self._is_due_now(medication, now),
+            "due_now": self._is_due_now(medication, now, state),
+            "outstanding": outstanding is not None,
+            "outstanding_time": outstanding.isoformat() if outstanding else None,
             "needs_refill": self._needs_refill(medication),
         }
 
@@ -305,6 +522,7 @@ class MedicationTrackerManager:
             "tracked_caregivers": ", ".join(caregiver_names) or "None",
             "medication_registry": len(medications),
             "due_now_count": sum(1 for item in snapshots if item["due_now"]),
+            "outstanding_count": sum(1 for item in snapshots if item["outstanding"]),
             "missed_dose_count": sum(item["missed_doses"] for item in snapshots),
             "refill_needed_count": sum(1 for item in snapshots if item["needs_refill"]),
             "caregiver_confirmation_count": sum(
@@ -321,7 +539,7 @@ class MedicationTrackerManager:
             snapshot = self.get_snapshot(medication.medication_id)
             entity_base = slugify(medication.name)
             status = self._current_display_status(medication, now)
-            if status == "On Track" and snapshot["needs_refill"]:
+            if status == STATUS_ON_TRACK and snapshot["needs_refill"]:
                 status = "Needs Refill"
 
             rows.append(
@@ -365,6 +583,54 @@ class MedicationTrackerManager:
 
         return rows
 
+    def get_today_doses(self) -> list[dict[str, Any]]:
+        """Return today's scheduled doses with their status, for the panel."""
+        now = dt_util.now()
+        doses: list[dict[str, Any]] = []
+        for medication in self.medications.values():
+            state = self._match_state(medication, now)
+            outstanding = self._outstanding_occurrence(medication, now, state)
+            for occurrence in state.occurrences:
+                if occurrence.date() != now.date():
+                    continue
+                doses.append(
+                    {
+                        "medication_id": medication.medication_id,
+                        "medication_name": medication.name,
+                        "profile_id": medication.profile_id,
+                        "profile_name": medication.profile_name,
+                        "dosage": medication.dosage,
+                        "time": occurrence.strftime("%H:%M"),
+                        "scheduled_at": occurrence.isoformat(),
+                        "status": self._occurrence_status(medication, occurrence, now, state.matched),
+                        "can_take": outstanding is not None and outstanding == occurrence,
+                    }
+                )
+        doses.sort(key=lambda item: (item["scheduled_at"], item["profile_name"].lower(), item["medication_name"].lower()))
+        return doses
+
+    def get_recent_logs(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return the newest dose logs across all medications."""
+        entries: list[dict[str, Any]] = []
+        for medication in self.medications.values():
+            for dose_log in medication.dose_logs[-limit:]:
+                entries.append(
+                    {
+                        "medication_id": medication.medication_id,
+                        "medication_name": medication.name,
+                        "profile_name": medication.profile_name,
+                        "taken_at": dose_log.taken_at.isoformat(),
+                        "source": dose_log.source,
+                        "confirmed_by": dose_log.confirmed_by,
+                    }
+                )
+        entries.sort(key=lambda item: item["taken_at"], reverse=True)
+        return entries[:limit]
+
+    # ------------------------------------------------------------------
+    # Alerts
+    # ------------------------------------------------------------------
+
     def get_pending_alerts(self) -> list[dict[str, Any]]:
         """Return due, missed, and refill alerts that still need notifying."""
         now = dt_util.now()
@@ -377,63 +643,69 @@ class MedicationTrackerManager:
             if not medication.notification_enabled:
                 continue
 
-            due_schedule = self._current_due_schedule(medication, now)
-            if due_schedule and medication.last_due_notification != due_schedule.isoformat():
-                due_alert_groups[
-                    (
-                        medication.profile_id,
-                        due_schedule.isoformat(),
-                        medication.notify_service,
-                    )
-                ].append(
-                    {
-                        "medication_id": medication.medication_id,
-                        "profile_name": medication.profile_name,
-                        "medication_name": medication.name,
-                        "dosage": medication.dosage,
-                        "notify_service": medication.notify_service,
-                        "scheduled_time": due_schedule,
-                        "display_time": self._effective_due_start(medication, due_schedule),
-                    }
-                )
+            state = self._match_state(medication, now)
+            notify_service = self.resolve_notify_service(medication)
 
-            missed_schedule = self._current_missed_schedule(medication, now)
+            due_schedule = self._current_due_schedule(medication, now, state)
+            if due_schedule:
+                marker = due_schedule.isoformat()
+                is_repeat = False
+                send_due = False
+                if medication.last_due_notification != marker:
+                    send_due = True
+                elif (
+                    medication.repeat_every_minutes > 0
+                    and medication.due_repeat_count < 1 + medication.max_repeats
+                    and medication.last_due_sent_at
+                    and now >= datetime.fromisoformat(medication.last_due_sent_at)
+                    + timedelta(minutes=medication.repeat_every_minutes)
+                ):
+                    send_due = True
+                    is_repeat = True
+                if send_due:
+                    due_alert_groups[(medication.profile_id, marker, notify_service)].append(
+                        {
+                            "medication_id": medication.medication_id,
+                            "profile_id": medication.profile_id,
+                            "profile_name": medication.profile_name,
+                            "medication_name": medication.name,
+                            "dosage": medication.dosage,
+                            "notify_service": notify_service,
+                            "scheduled_time": due_schedule,
+                            "display_time": self._effective_due_start(medication, due_schedule),
+                            "repeat": is_repeat,
+                        }
+                    )
+
+            missed_schedule = self._current_missed_schedule(medication, now, state)
             if missed_schedule and medication.last_missed_notification != missed_schedule.isoformat():
                 missed_alert_groups[
-                    (
-                        medication.profile_id,
-                        missed_schedule.isoformat(),
-                        medication.notify_service,
-                    )
+                    (medication.profile_id, missed_schedule.isoformat(), notify_service)
                 ].append(
                     {
                         "medication_id": medication.medication_id,
+                        "profile_id": medication.profile_id,
                         "profile_name": medication.profile_name,
                         "medication_name": medication.name,
                         "dosage": medication.dosage,
-                        "notify_service": medication.notify_service,
+                        "notify_service": notify_service,
                         "scheduled_time": missed_schedule,
                     }
                 )
 
             if self._needs_refill(medication):
-                refill_marker = date.today().isoformat()
+                refill_marker = now.date().isoformat()
                 if medication.last_refill_notification != refill_marker:
                     remaining = medication.quantity if medication.quantity is not None else 0
-                    refill_alert_groups[
-                        (
-                            medication.profile_id,
-                            refill_marker,
-                            medication.notify_service,
-                        )
-                    ].append(
+                    refill_alert_groups[(medication.profile_id, refill_marker, notify_service)].append(
                         {
                             "medication_id": medication.medication_id,
+                            "profile_id": medication.profile_id,
                             "profile_name": medication.profile_name,
                             "medication_name": medication.name,
                             "dosage": medication.dosage,
                             "remaining": remaining,
-                            "notify_service": medication.notify_service,
+                            "notify_service": notify_service,
                             "scheduled_time": None,
                         }
                     )
@@ -443,20 +715,18 @@ class MedicationTrackerManager:
                     latest_log.confirmed_by is None
                     and medication.last_caregiver_notification != latest_log.taken_at.isoformat()
                 ):
+                    caregiver_service = self.resolve_notify_service(medication, caregiver=True)
                     caregiver_alert_groups[
-                        (
-                            medication.profile_id,
-                            latest_log.taken_at.isoformat(),
-                            medication.caregiver_notify_service or medication.notify_service,
-                        )
+                        (medication.profile_id, latest_log.taken_at.isoformat(), caregiver_service)
                     ].append(
                         {
                             "medication_id": medication.medication_id,
+                            "profile_id": medication.profile_id,
                             "profile_name": medication.profile_name,
                             "medication_name": medication.name,
                             "dosage": medication.dosage,
                             "caregiver_name": medication.caregiver_name,
-                            "notify_service": medication.caregiver_notify_service or medication.notify_service,
+                            "notify_service": caregiver_service,
                             "scheduled_time": latest_log.taken_at,
                         }
                     )
@@ -471,6 +741,29 @@ class MedicationTrackerManager:
 
         return alerts
 
+    def alert_still_active(self, alert_type: str, medication_ids: Iterable[str]) -> bool:
+        """Return whether an alert that was already sent still applies."""
+        now = dt_util.now()
+        for medication_id in medication_ids:
+            medication = self.medications.get(medication_id)
+            if medication is None:
+                continue
+            state = self._match_state(medication, now)
+            if alert_type == "due" and self._current_due_schedule(medication, now, state):
+                return True
+            if alert_type == "missed" and self._current_missed_schedule(medication, now, state):
+                return True
+            if alert_type == "refill" and self._needs_refill(medication):
+                return True
+            if (
+                alert_type == "caregiver_confirmation"
+                and medication.confirmation_required
+                and medication.dose_logs
+                and not medication.dose_logs[-1].confirmed_by
+            ):
+                return True
+        return False
+
     async def async_mark_alert_sent(
         self,
         medication_id: str,
@@ -478,20 +771,29 @@ class MedicationTrackerManager:
         scheduled_time: datetime | None = None,
     ) -> None:
         """Persist notification markers to avoid duplicate alerts."""
-        medication = self._get_medication(medication_id)
+        medication = self.medications.get(medication_id)
+        if medication is None:
+            return
+        now = dt_util.now()
         if alert_type == "due" and scheduled_time:
-            medication.last_due_notification = scheduled_time.isoformat()
+            marker = scheduled_time.isoformat()
+            if medication.last_due_notification == marker:
+                medication.due_repeat_count += 1
+            else:
+                medication.due_repeat_count = 1
+            medication.last_due_notification = marker
+            medication.last_due_sent_at = now.isoformat()
         elif alert_type == "missed" and scheduled_time:
             medication.last_missed_notification = scheduled_time.isoformat()
         elif alert_type == "refill":
-            medication.last_refill_notification = date.today().isoformat()
+            medication.last_refill_notification = now.date().isoformat()
         elif alert_type == "caregiver_confirmation" and scheduled_time:
             medication.last_caregiver_notification = scheduled_time.isoformat()
         await self._async_save()
 
     async def _async_save(self) -> None:
         """Persist medication state."""
-        await self.store.async_save(self.medications)
+        await self.store.async_save(self.medications, self.settings)
 
     def _get_medication(self, medication_id: str) -> Medication:
         """Fetch a medication or raise a service-friendly error."""
@@ -499,6 +801,10 @@ class MedicationTrackerManager:
             return self.medications[medication_id]
         except KeyError as err:
             raise HomeAssistantError(f"Unknown medication_id: {medication_id}") from err
+
+    # ------------------------------------------------------------------
+    # Schedule maths
+    # ------------------------------------------------------------------
 
     def _normalize_schedules(self, schedules: list[str]) -> list[str]:
         """Normalize schedule strings."""
@@ -517,15 +823,42 @@ class MedicationTrackerManager:
 
         return sorted(normalized)
 
+    def _normalize_days(self, days_of_week: list[int] | None) -> list[int] | None:
+        """Normalize a weekday list (0 = Monday). None or all seven days means every day."""
+        if not days_of_week:
+            return None
+        try:
+            days = sorted({int(day) for day in days_of_week})
+        except (TypeError, ValueError) as err:
+            raise HomeAssistantError("days_of_week must be numbers from 0 (Mon) to 6 (Sun).") from err
+        if any(day < 0 or day > 6 for day in days):
+            raise HomeAssistantError("days_of_week must be numbers from 0 (Mon) to 6 (Sun).")
+        return None if len(days) == 7 else days
+
     def _combine(self, target_date: date, schedule: str) -> datetime:
         """Combine a date and schedule into a timezone-aware datetime."""
         scheduled_time = time.fromisoformat(schedule)
         return datetime.combine(target_date, scheduled_time, tzinfo=dt_util.DEFAULT_TIME_ZONE)
 
+    def _is_scheduled_day(self, medication: Medication, day: date) -> bool:
+        """Return whether the medication is scheduled on a calendar day."""
+        return not medication.days_of_week or day.weekday() in medication.days_of_week
+
+    def _created_at(self, medication: Medication) -> datetime | None:
+        """Return when the medication was created, if known."""
+        if not medication.created_at:
+            return None
+        try:
+            return datetime.fromisoformat(medication.created_at)
+        except ValueError:
+            return None
+
     def _next_scheduled_dose(self, medication: Medication, now: datetime) -> datetime | None:
         """Return the next scheduled dose datetime."""
-        for day_offset in range(0, 8):
+        for day_offset in range(0, 9):
             candidate_date = now.date() + timedelta(days=day_offset)
+            if not self._is_scheduled_day(medication, candidate_date):
+                continue
             for schedule in medication.schedules:
                 candidate = self._combine(candidate_date, schedule)
                 if candidate.isoformat() in medication.skipped_occurrences:
@@ -544,56 +877,133 @@ class MedicationTrackerManager:
         if daily_doses == 0:
             return None
 
-        return math.floor(medication.quantity / daily_doses)
+        scheduled_days = len(medication.days_of_week) if medication.days_of_week else 7
+        doses_per_week = daily_doses * scheduled_days
+        return math.floor(medication.quantity / doses_per_week * 7)
 
-    def _current_due_schedule(self, medication: Medication, now: datetime) -> datetime | None:
-        """Return the currently due schedule inside the reminder window."""
-        matched_today = set(
-            scheduled
-            for scheduled in self._matched_occurrences(
-                medication,
-                [self._combine(now.date(), schedule) for schedule in medication.schedules],
-            )
-            if scheduled.date() == now.date()
+    def _scheduled_occurrences(self, medication: Medication, start_date: date, end_date: date) -> list[datetime]:
+        """Return every scheduled occurrence in a date range."""
+        created = self._created_at(medication)
+        occurrences: list[datetime] = []
+        current_date = start_date
+        while current_date <= end_date:
+            if self._is_scheduled_day(medication, current_date):
+                for schedule in medication.schedules:
+                    occurrence = self._combine(current_date, schedule)
+                    if created is not None and occurrence < created:
+                        continue
+                    occurrences.append(occurrence)
+            current_date += timedelta(days=1)
+        return sorted(occurrences)
+
+    def _window_starts(self, occurrences: list[datetime]) -> list[datetime]:
+        """Return the earliest time a dose can count for each occurrence."""
+        starts: list[datetime] = []
+        for index, occurrence in enumerate(occurrences):
+            gap = timedelta(hours=24) if index == 0 else occurrence - occurrences[index - 1]
+            early = min(timedelta(minutes=EARLY_WINDOW_MINUTES), gap / 2)
+            starts.append(occurrence - early)
+        return starts
+
+    def _match_state(self, medication: Medication, now: datetime) -> _MatchState:
+        """Match logged doses to scheduled occurrences.
+
+        Each occurrence owns the period from shortly before it (so an early dose counts)
+        until shortly before the next occurrence (so a late dose still counts for it).
+        """
+        occurrences = self._scheduled_occurrences(
+            medication,
+            medication.start_date,
+            now.date() + timedelta(days=2),
         )
-        for schedule in medication.schedules:
-            scheduled_time = self._combine(now.date(), schedule)
+        starts = self._window_starts(occurrences)
+        matched: set[datetime] = set()
+        for logged_at in sorted(dt_util.as_local(dose_log.taken_at) for dose_log in medication.dose_logs):
+            index = bisect_right(starts, logged_at) - 1
+            if index >= 0:
+                matched.add(occurrences[index])
+        return _MatchState(occurrences, starts, matched)
+
+    def _matched_occurrences(
+        self,
+        medication: Medication,
+        occurrences: list[datetime],
+        now: datetime | None = None,
+    ) -> list[datetime]:
+        """Return the given occurrences that have a matching dose."""
+        state = self._match_state(medication, now or dt_util.now())
+        return [occurrence for occurrence in occurrences if occurrence in state.matched]
+
+    def _outstanding_occurrence(
+        self,
+        medication: Medication,
+        now: datetime,
+        state: _MatchState | None = None,
+    ) -> datetime | None:
+        """Return the occurrence a dose logged right now would be for, if it still needs one."""
+        state = state or self._match_state(medication, now)
+        index = bisect_right(state.window_starts, now) - 1
+        if index < 0:
+            return None
+        occurrence = state.occurrences[index]
+        if occurrence in state.matched or occurrence.isoformat() in medication.skipped_occurrences:
+            return None
+        if now - occurrence > LATE_WINDOW:
+            return None
+        return occurrence
+
+    def _current_due_schedule(
+        self,
+        medication: Medication,
+        now: datetime,
+        state: _MatchState | None = None,
+    ) -> datetime | None:
+        """Return the currently due schedule inside the reminder window."""
+        state = state or self._match_state(medication, now)
+        for scheduled_time in state.occurrences:
+            if scheduled_time.date() != now.date():
+                continue
             if scheduled_time.isoformat() in medication.skipped_occurrences:
                 continue
             effective_due_start = self._effective_due_start(medication, scheduled_time)
             due_time = effective_due_start + timedelta(minutes=medication.reminder_minutes)
             if effective_due_start <= now <= due_time:
-                if scheduled_time in matched_today:
+                if scheduled_time in state.matched:
                     continue
                 return scheduled_time
         return None
 
-    def _current_missed_schedule(self, medication: Medication, now: datetime) -> datetime | None:
-        """Return a missed schedule once the overdue window has passed."""
-        matched_today = set(
-            scheduled
-            for scheduled in self._matched_occurrences(
-                medication,
-                [self._combine(now.date(), schedule) for schedule in medication.schedules],
-            )
-            if scheduled.date() == now.date()
-        )
-        for schedule in medication.schedules:
-            scheduled_time = self._combine(now.date(), schedule)
-            if scheduled_time.isoformat() in medication.skipped_occurrences:
+    def _past_missed_threshold(self, medication: Medication, occurrence: datetime, now: datetime) -> bool:
+        """Return whether an occurrence has passed its missed-dose threshold."""
+        effective_due_start = self._effective_due_start(medication, occurrence)
+        return now >= effective_due_start + timedelta(minutes=medication.missed_after_minutes)
+
+    def _current_missed_schedule(
+        self,
+        medication: Medication,
+        now: datetime,
+        state: _MatchState | None = None,
+    ) -> datetime | None:
+        """Return the most recent missed occurrence from the last day, if any."""
+        state = state or self._match_state(medication, now)
+        for occurrence in reversed(state.occurrences):
+            if occurrence > now:
                 continue
-            effective_due_start = self._effective_due_start(medication, scheduled_time)
-            missed_time = effective_due_start + timedelta(minutes=medication.missed_after_minutes)
-            if now < missed_time:
+            if now - occurrence > timedelta(hours=24):
+                break
+            if occurrence in state.matched or occurrence.isoformat() in medication.skipped_occurrences:
                 continue
-            if scheduled_time in matched_today:
-                continue
-            return scheduled_time
+            if self._past_missed_threshold(medication, occurrence, now):
+                return occurrence
         return None
 
-    def _is_due_now(self, medication: Medication, now: datetime) -> bool:
+    def _recent_missed(self, medication: Medication, now: datetime, state: _MatchState) -> bool:
+        """Return whether a dose from the last day was missed."""
+        return self._current_missed_schedule(medication, now, state) is not None
+
+    def _is_due_now(self, medication: Medication, now: datetime, state: _MatchState | None = None) -> bool:
         """Return whether a medication is inside its due window."""
-        return self._current_due_schedule(medication, now) is not None
+        return self._current_due_schedule(medication, now, state) is not None
 
     def _needs_refill(self, medication: Medication) -> bool:
         """Return whether the medication has crossed the refill threshold."""
@@ -601,120 +1011,108 @@ class MedicationTrackerManager:
             return False
         return medication.quantity <= medication.refill_at
 
-    def _scheduled_occurrences(self, medication: Medication, start_date: date, end_date: date) -> list[datetime]:
-        """Return every scheduled occurrence in a date range."""
-        occurrences: list[datetime] = []
-        current_date = start_date
-        while current_date <= end_date:
-            for schedule in medication.schedules:
-                occurrences.append(self._combine(current_date, schedule))
-            current_date += timedelta(days=1)
-        return sorted(occurrences)
-
-    def _matched_occurrences(
-        self,
-        medication: Medication,
-        occurrences: list[datetime],
-    ) -> list[datetime]:
-        """Greedily match dose logs to scheduled occurrences."""
-        logs = [dt_util.as_local(dose_log.taken_at) for dose_log in medication.dose_logs]
-        remaining_logs = sorted(logs)
-        matched: list[datetime] = []
-        for occurrence in sorted(occurrences):
-            for index, logged_at in enumerate(remaining_logs):
-                if logged_at.date() != occurrence.date():
-                    continue
-                if logged_at >= occurrence:
-                    matched.append(occurrence)
-                    remaining_logs.pop(index)
-                    break
-        return matched
-
-    def _missed_doses(
-        self,
-        medication: Medication,
-        now: datetime,
-        matched_occurrences: list[datetime],
-    ) -> int:
+    def _missed_doses(self, medication: Medication, now: datetime, state: _MatchState) -> int:
         """Count scheduled doses that have passed their missed threshold without a matching log."""
         missed = 0
-        matched_set = set(matched_occurrences)
-        for occurrence in self._scheduled_occurrences(medication, medication.start_date, now.date()):
-            if occurrence in matched_set:
+        for occurrence in state.occurrences:
+            if occurrence.date() > now.date():
+                break
+            if occurrence in state.matched:
                 continue
             if occurrence.isoformat() in medication.skipped_occurrences:
                 continue
-            effective_due_start = self._effective_due_start(medication, occurrence)
-            if now >= effective_due_start + timedelta(minutes=medication.missed_after_minutes):
+            if self._past_missed_threshold(medication, occurrence, now):
                 missed += 1
         return missed
+
+    def _occurrence_status(
+        self,
+        medication: Medication,
+        occurrence: datetime,
+        now: datetime,
+        matched: set[datetime],
+    ) -> str:
+        """Return the status of one scheduled occurrence."""
+        if occurrence.isoformat() in medication.skipped_occurrences:
+            return STATUS_SKIPPED
+        if occurrence in matched:
+            return STATUS_TAKEN
+
+        effective_due_start = self._effective_due_start(medication, occurrence)
+
+        if now >= effective_due_start + timedelta(minutes=medication.missed_after_minutes):
+            return STATUS_MISSED
+        if occurrence <= now < effective_due_start:
+            return STATUS_SNOOZED
+        if effective_due_start <= now <= effective_due_start + timedelta(minutes=medication.reminder_minutes):
+            return STATUS_DUE
+        return STATUS_ON_TRACK
 
     def _schedule_statuses(self, medication: Medication, now: datetime, days_ahead: int = 30) -> dict[str, str]:
         """Return day-and-time specific statuses for upcoming scheduled doses."""
         end_date = now.date() + timedelta(days=max(days_ahead - 1, 0))
-        occurrences = self._scheduled_occurrences(medication, now.date(), end_date)
-        matched_occurrences = set(self._matched_occurrences(medication, occurrences))
-        statuses: dict[str, str] = {}
-
-        for occurrence in occurrences:
-            occurrence_key = occurrence.strftime("%Y-%m-%dT%H:%M")
-            if occurrence.isoformat() in medication.skipped_occurrences:
-                statuses[occurrence_key] = "Skipped"
-                continue
-            if occurrence in matched_occurrences:
-                statuses[occurrence_key] = "Taken"
-                continue
-
-            effective_due_start = self._effective_due_start(medication, occurrence)
-
-            if now >= effective_due_start + timedelta(minutes=medication.missed_after_minutes):
-                statuses[occurrence_key] = "Missed Dose"
-                continue
-
-            if occurrence <= now < effective_due_start:
-                statuses[occurrence_key] = "Snoozed"
-                continue
-
-            if effective_due_start <= now <= effective_due_start + timedelta(minutes=medication.reminder_minutes):
-                statuses[occurrence_key] = "Due Now"
-                continue
-
-            statuses[occurrence_key] = "On Track"
-
-        return statuses
+        occurrences = [
+            occurrence
+            for occurrence in self._scheduled_occurrences(medication, now.date(), end_date)
+        ]
+        matched = self._match_state(medication, now).matched
+        return {
+            occurrence.strftime("%Y-%m-%dT%H:%M"): self._occurrence_status(medication, occurrence, now, matched)
+            for occurrence in occurrences
+        }
 
     def _current_display_status(self, medication: Medication, now: datetime) -> str:
         """Return a card-friendly status based on today's scheduled doses."""
-        today_occurrences = self._scheduled_occurrences(medication, now.date(), now.date())
+        state = self._match_state(medication, now)
+        today_occurrences = [occurrence for occurrence in state.occurrences if occurrence.date() == now.date()]
         if not today_occurrences:
-            return "On Track"
+            return STATUS_ON_TRACK
 
-        matched_today = set(self._matched_occurrences(medication, today_occurrences))
         has_taken_today = False
-
         for occurrence in today_occurrences:
-            if occurrence in matched_today:
+            status = self._occurrence_status(medication, occurrence, now, state.matched)
+            if status == STATUS_TAKEN:
                 has_taken_today = True
-                continue
-
-            if occurrence.isoformat() in medication.skipped_occurrences:
-                continue
-
-            effective_due_start = self._effective_due_start(medication, occurrence)
-
-            if now >= effective_due_start + timedelta(minutes=medication.missed_after_minutes):
-                return "Missed Dose"
-
-            if occurrence <= now < effective_due_start:
-                return "Snoozed"
-
-            if effective_due_start <= now <= effective_due_start + timedelta(minutes=medication.reminder_minutes):
-                return "Due Now"
+            elif status in (STATUS_MISSED, STATUS_SNOOZED, STATUS_DUE):
+                return status
 
         if has_taken_today:
-            return "Taken"
+            return STATUS_TAKEN
 
-        return "On Track"
+        return STATUS_ON_TRACK
+
+    # ------------------------------------------------------------------
+    # Alert builders
+    # ------------------------------------------------------------------
+
+    def _build_actions(self, kind: str, items: list[dict[str, Any]]) -> list[dict[str, str]]:
+        """Build mobile notification actions for one or more medications.
+
+        Android shows up to three actions, so a group gets "All taken" plus the first two
+        individual medications. Everything stays available from the panel.
+        """
+        if len(items) == 1:
+            medication_id = items[0]["medication_id"]
+            actions = [
+                {
+                    "action": f"{ACTION_CONFIRMED_PREFIX}{medication_id}",
+                    "title": "Taken" if kind == "due" else "Mark taken",
+                }
+            ]
+            if kind == "due":
+                actions.append({"action": f"{ACTION_SNOOZE_PREFIX}{medication_id}", "title": "Snooze 10 min"})
+            actions.append({"action": f"{ACTION_SKIP_PREFIX}{medication_id}", "title": "Skip"})
+            return actions
+
+        actions = [{"action": f"{ACTION_ALL_PREFIX}{items[0]['profile_id']}", "title": "All taken"}]
+        for item in items[:2]:
+            actions.append(
+                {
+                    "action": f"{ACTION_CONFIRMED_PREFIX}{item['medication_id']}",
+                    "title": f"Taken: {item['medication_name']}",
+                }
+            )
+        return actions
 
     def _build_due_alert(self, due_medications: list[dict[str, Any]]) -> dict[str, Any]:
         """Build a single due alert for one medication or a grouped set."""
@@ -726,10 +1124,12 @@ class MedicationTrackerManager:
         medication_ids = [item["medication_id"] for item in sorted_due_medications]
         scheduled_time = first["scheduled_time"]
         display_time = first.get("display_time", scheduled_time)
+        is_repeat = all(item.get("repeat") for item in sorted_due_medications)
+        prefix = "Reminder: " if is_repeat else ""
 
         if len(sorted_due_medications) == 1:
             message = (
-                f"{first['profile_name']} is due to take {first['medication_name']} "
+                f"{prefix}{first['profile_name']} is due to take {first['medication_name']} "
                 f"({first['dosage']}) at {display_time.strftime('%H:%M')}."
             )
         else:
@@ -738,7 +1138,7 @@ class MedicationTrackerManager:
                 for item in sorted_due_medications
             )
             message = (
-                f"{first['profile_name']} is due to take {len(sorted_due_medications)} medications "
+                f"{prefix}{first['profile_name']} is due to take {len(sorted_due_medications)} medications "
                 f"at {display_time.strftime('%H:%M')}:\n{medication_lines}"
             )
 
@@ -749,13 +1149,8 @@ class MedicationTrackerManager:
             "notify_service": first["notify_service"],
             "scheduled_time": scheduled_time,
             "message": message,
-            "actions": [
-                {
-                    "action": f"MEDICATION_CONFIRMED_{item['medication_id']}",
-                    "title": f"Taken: {item['medication_name']}",
-                }
-                for item in sorted_due_medications
-            ],
+            "repeat": is_repeat,
+            "actions": self._build_actions("due", sorted_due_medications),
             "notification_suffix": "_".join(medication_ids) if len(medication_ids) > 1 else None,
         }
 
@@ -791,13 +1186,7 @@ class MedicationTrackerManager:
             "notify_service": first["notify_service"],
             "scheduled_time": scheduled_time,
             "message": message,
-            "actions": [
-                {
-                    "action": f"MEDICATION_CONFIRMED_{item['medication_id']}",
-                    "title": f"Mark Taken: {item['medication_name']}",
-                }
-                for item in sorted_missed_medications
-            ],
+            "actions": self._build_actions("missed", sorted_missed_medications),
             "notification_suffix": "_".join(medication_ids) if len(medication_ids) > 1 else None,
         }
 
@@ -853,8 +1242,12 @@ class MedicationTrackerManager:
         daily_doses = len(medication.schedules)
         if daily_doses <= 0:
             return None
-        days_remaining = medication.quantity / daily_doses
-        return now + timedelta(days=days_remaining)
+        days_remaining = self._days_remaining(medication)
+        if days_remaining is None:
+            return None
+        # Anchor to the start of the day so the date does not creep forward every minute.
+        anchor = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return anchor + timedelta(days=medication.quantity / (daily_doses * (len(medication.days_of_week) if medication.days_of_week else 7)) * 7)
 
     def _stock_status(
         self,

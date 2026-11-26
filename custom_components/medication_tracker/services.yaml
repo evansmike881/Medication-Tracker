@@ -103,6 +103,28 @@ add_medication:
         number:
           min: 0
           mode: box
+    days_of_week:
+      required: false
+      description: Weekdays to take it, 0 = Monday ... 6 = Sunday. Leave empty for every day.
+      example: [0, 2, 4]
+      selector:
+        object:
+    repeat_every_minutes:
+      required: false
+      description: Re-send the reminder this often while it is still not taken (0 = never repeat).
+      selector:
+        number:
+          min: 0
+          max: 240
+          mode: box
+    max_repeats:
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 20
+          mode: box
+
 log_dose:
   name: Log dose
   description: Record that a scheduled or manual dose has been taken.
@@ -178,3 +200,72 @@ skip_medication:
       example: "2026-06-12T20:00:00+01:00"
       selector:
         text:
+
+log_all_due:
+  name: Mark all due as taken
+  description: Log a dose for every medication that is currently due or overdue. Optionally limit it to one profile or specific medications.
+  fields:
+    profile_id:
+      required: false
+      selector:
+        text:
+    medication_ids:
+      required: false
+      selector:
+        object:
+    source:
+      required: false
+      default: manual
+      selector:
+        text:
+    confirmed_by:
+      required: false
+      selector:
+        text:
+
+delete_dose:
+  name: Delete logged dose
+  description: Remove a dose that was logged by mistake. Gives the tablet back to the remaining quantity.
+  fields:
+    medication_id:
+      required: true
+      selector:
+        text:
+    taken_at:
+      required: true
+      description: The exact taken_at timestamp of the log entry (as shown in the History tab).
+      selector:
+        text:
+
+reset_history:
+  name: Reset history
+  description: Start a medication's missed-dose history fresh from now (useful after a break).
+  fields:
+    medication_id:
+      required: true
+      selector:
+        text:
+
+update_settings:
+  name: Update settings
+  description: Change integration-wide settings.
+  fields:
+    default_notify_service:
+      required: false
+      description: Notify service used by any medication that has none of its own, e.g. notify.mobile_app_mike_s24.
+      selector:
+        text:
+    fallback_notify_service:
+      required: false
+      selector:
+        text:
+    all_tag_ids:
+      required: false
+      description: NFC tag IDs that mark everything currently due as taken.
+      selector:
+        object:
+    profile_tags:
+      required: false
+      description: Map of NFC tag ID to profile ID that marks that person's due medications as taken.
+      selector:
+        object:
