@@ -124,6 +124,45 @@ add_medication:
           min: 0
           max: 20
           mode: box
+    end_date:
+      required: false
+      description: Last day of a course, e.g. 2026-12-31. Leave empty for no end.
+      selector:
+        date:
+    as_needed:
+      required: false
+      description: As-needed medication with no fixed times (schedules can be empty).
+      selector:
+        boolean:
+    max_doses_per_day:
+      required: false
+      description: For as-needed medication, the most doses allowed in a day (0 = no limit).
+      selector:
+        number:
+          min: 0
+          max: 48
+          mode: box
+    interval_days:
+      required: false
+      description: Take every N days (1 = daily, 2 = every other day, 7 = weekly).
+      selector:
+        number:
+          min: 1
+          max: 30
+          mode: box
+    anchor_date:
+      required: false
+      description: The first day of an every-N-days schedule.
+      selector:
+        date:
+    escalate_after_minutes:
+      required: false
+      description: Tell the caregiver if the dose is still not taken this long after it was due (0 = off).
+      selector:
+        number:
+          min: 0
+          max: 1440
+          mode: box
 
 log_dose:
   name: Log dose
@@ -269,3 +308,42 @@ update_settings:
       description: Map of NFC tag ID to profile ID that marks that person's due medications as taken.
       selector:
         object:
+    escalation_notify_service:
+      required: false
+      description: Who to tell when a dose is overdue and the medication has no caregiver phone of its own.
+      selector:
+        text:
+    critical_notifications:
+      required: false
+      description: Use loud alarm-style phone notifications for due, missed and escalated doses (Android).
+      selector:
+        boolean:
+    announce_service:
+      required: false
+      description: A notify service that speaks reminders aloud, e.g. notify.alexa_media_kitchen.
+      selector:
+        text:
+    announce_only_when_home_entity:
+      required: false
+      description: Only announce when this person or device tracker is home.
+      selector:
+        entity:
+          domain: [person, device_tracker]
+    quiet_hours_start:
+      required: false
+      description: Start of quiet hours (HH:MM). No announcements and no refill reminders.
+      selector:
+        time:
+    quiet_hours_end:
+      required: false
+      selector:
+        time:
+
+undo_last_dose:
+  name: Undo last dose
+  description: Remove the most recent logged dose of a medication and give the stock back.
+  fields:
+    medication_id:
+      required: true
+      selector:
+        text:

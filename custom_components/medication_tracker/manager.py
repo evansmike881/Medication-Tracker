@@ -26,10 +26,19 @@ from .const import (
     DEFAULT_REPEAT_EVERY_MINUTES,
     DEFAULT_SETTINGS,
     EARLY_WINDOW_MINUTES,
+    HISTORY_WINDOW_DAYS,
+    LOG_RETENTION_DAYS,
+    MAX_INTERVAL_DAYS,
     SETTING_ALL_TAG_IDS,
+    SETTING_ANNOUNCE_HOME_ENTITY,
+    SETTING_ANNOUNCE_SERVICE,
+    SETTING_CRITICAL,
     SETTING_DEFAULT_NOTIFY,
+    SETTING_ESCALATION_NOTIFY,
     SETTING_FALLBACK_NOTIFY,
     SETTING_PROFILE_TAGS,
+    SETTING_QUIET_END,
+    SETTING_QUIET_START,
 )
 from .medication_database import MedicationDatabase
 from .models import DoseLog, Medication
@@ -77,6 +86,15 @@ class MedicationTrackerManager:
         """Load persisted state."""
         self.database = await MedicationDatabase.async_load(self.hass)
         self.medications, self.settings = await self.store.async_load_all()
+        self._prune_old_logs()
+
+    def _prune_old_logs(self) -> None:
+        """Drop dose logs older than the retention period so storage stays small."""
+        cutoff = dt_util.now() - timedelta(days=LOG_RETENTION_DAYS)
+        for medication in self.medications.values():
+            kept = [item for item in medication.dose_logs if dt_util.as_local(item.taken_at) >= cutoff]
+            if len(kept) != len(medication.dose_logs):
+                medication.dose_logs = kept
 
     # ------------------------------------------------------------------
     # Medication CRUD
@@ -111,11 +129,42 @@ class MedicationTrackerManager:
         repeat_every_minutes: int | None = None,
         max_repeats: int | None = None,
         days_of_week: list[int] | None = None,
+        end_date: str | None = None,
+        as_needed: bool | None = None,
+        max_doses_per_day: int | None = None,
+        interval_days: int | None = None,
+        anchor_date: str | None = None,
+        escalate_after_minutes: int | None = None,
     ) -> Medication:
         """Create or update a medication."""
-        normalized_schedules = self._normalize_schedules(schedules)
-        normalized_days = self._normalize_days(days_of_week)
         existing = self.medications.get(medication_id)
+        if as_needed is None:
+            as_needed = existing.as_needed if existing else False
+        normalized_schedules = self._normalize_schedules(schedules, allow_empty=bool(as_needed))
+        normalized_days = self._normalize_days(days_of_week)
+        # For these, None keeps the stored value and "" / 0 clears it.
+        if end_date is None:
+            end_value = existing.end_date if existing else None
+        else:
+            end_value = self._parse_date(end_date, "end_date")
+        if interval_days is None:
+            interval_value = existing.interval_days if existing else 1
+        else:
+            interval_value = int(interval_days)
+        if interval_value < 1 or interval_value > MAX_INTERVAL_DAYS:
+            raise HomeAssistantError(f"interval_days must be between 1 and {MAX_INTERVAL_DAYS}.")
+        if anchor_date:
+            anchor_value = self._parse_date(anchor_date, "anchor_date")
+        else:
+            anchor_value = (existing.anchor_date if existing else None) or dt_util.now().date()
+        if max_doses_per_day is None:
+            max_doses_value = existing.max_doses_per_day if existing else None
+        else:
+            max_doses_value = int(max_doses_per_day) or None
+        if escalate_after_minutes is None:
+            escalate_value = existing.escalate_after_minutes if existing else 0
+        else:
+            escalate_value = max(int(escalate_after_minutes), 0)
         database_entry = self.database.get(database_entry_id) if database_entry_id else None
         computed_purpose = purpose or (database_entry.get("purpose", "") if database_entry else "")
         computed_form = form or (database_entry.get("form", "") if database_entry else "")
@@ -161,6 +210,13 @@ class MedicationTrackerManager:
             repeat_every_minutes=max(int(repeat_every_minutes), 0),
             max_repeats=max(int(max_repeats), 0),
             days_of_week=normalized_days,
+            end_date=end_value,
+            as_needed=bool(as_needed),
+            max_doses_per_day=max_doses_value,
+            interval_days=interval_value,
+            anchor_date=anchor_value,
+            escalate_after_minutes=escalate_value,
+            last_escalation_notification=existing.last_escalation_notification if existing else None,
             created_at=existing.created_at if existing else dt_util.now().isoformat(),
             last_due_sent_at=existing.last_due_sent_at if existing else None,
             due_repeat_count=existing.due_repeat_count if existing else 0,
@@ -194,6 +250,7 @@ class MedicationTrackerManager:
         medication.last_missed_notification = None
         medication.last_caregiver_notification = None
         medication.last_due_sent_at = None
+        medication.last_escalation_notification = None
         medication.due_repeat_count = 0
         medication.snoozed_until = None
         await self._async_save()
@@ -219,14 +276,25 @@ class MedicationTrackerManager:
         source: str,
         confirmed_by: str | None,
         allow_duplicate: bool,
+        taken_by: str | None = None,
     ) -> None:
         """Record a dose in memory without saving."""
         if _is_naive_datetime(timestamp):
             timestamp = dt_util.as_local(dt_util.as_utc(timestamp))
         if not allow_duplicate:
             self._validate_duplicate_guard(medication, timestamp)
+            if medication.as_needed and medication.max_doses_per_day:
+                day = dt_util.as_local(timestamp).date()
+                taken_that_day = sum(
+                    1 for item in medication.dose_logs if dt_util.as_local(item.taken_at).date() == day
+                )
+                if taken_that_day >= medication.max_doses_per_day:
+                    raise HomeAssistantError(
+                        f"{medication.name}: the limit of {medication.max_doses_per_day} doses "
+                        "per day has been reached."
+                    )
         medication.dose_logs.append(
-            DoseLog(taken_at=timestamp, source=source, confirmed_by=confirmed_by)
+            DoseLog(taken_at=timestamp, source=source, confirmed_by=confirmed_by, taken_by=taken_by)
         )
         medication.dose_logs.sort(key=lambda item: item.taken_at)
 
@@ -247,11 +315,12 @@ class MedicationTrackerManager:
         source: str = "manual",
         confirmed_by: str | None = None,
         allow_duplicate: bool = False,
+        taken_by: str | None = None,
     ) -> Medication:
         """Log a dose for a medication."""
         medication = self._get_medication(medication_id)
         timestamp = taken_at or dt_util.now()
-        self._apply_dose(medication, timestamp, source, confirmed_by, allow_duplicate)
+        self._apply_dose(medication, timestamp, source, confirmed_by, allow_duplicate, taken_by)
         await self._async_save()
         return medication
 
@@ -262,6 +331,7 @@ class MedicationTrackerManager:
         medication_ids: Iterable[str] | None = None,
         source: str = "manual",
         confirmed_by: str | None = None,
+        taken_by: str | None = None,
     ) -> dict[str, list[str]]:
         """Log one dose for every medication that is currently due or overdue.
 
@@ -279,7 +349,7 @@ class MedicationTrackerManager:
             if self._outstanding_occurrence(medication, now) is None:
                 continue
             try:
-                self._apply_dose(medication, now, source, confirmed_by, allow_duplicate=False)
+                self._apply_dose(medication, now, source, confirmed_by, False, taken_by)
             except HomeAssistantError:
                 blocked.append(medication.medication_id)
                 continue
@@ -303,6 +373,13 @@ class MedicationTrackerManager:
                 await self._async_save()
                 return medication
         raise HomeAssistantError("That dose log entry was not found.")
+
+    async def async_undo_last(self, medication_id: str) -> Medication:
+        """Remove the most recent logged dose."""
+        medication = self._get_medication(medication_id)
+        if not medication.dose_logs:
+            raise HomeAssistantError("There is no logged dose to undo.")
+        return await self.async_delete_dose(medication_id, medication.dose_logs[-1].taken_at.isoformat())
 
     async def async_snooze_medication(self, medication_id: str, minutes: int) -> Medication:
         """Snooze a medication reminder for a number of minutes."""
@@ -354,6 +431,17 @@ class MedicationTrackerManager:
                 self.settings[key] = value or None
             elif key == SETTING_ALL_TAG_IDS:
                 self.settings[key] = sorted({str(tag).strip() for tag in (value or []) if str(tag).strip()})
+            elif key == SETTING_CRITICAL:
+                self.settings[key] = bool(value)
+            elif key in (SETTING_ESCALATION_NOTIFY, SETTING_ANNOUNCE_SERVICE, SETTING_ANNOUNCE_HOME_ENTITY):
+                self.settings[key] = value or None
+            elif key in (SETTING_QUIET_START, SETTING_QUIET_END):
+                if value:
+                    try:
+                        value = time.fromisoformat(value).strftime("%H:%M")
+                    except ValueError as err:
+                        raise HomeAssistantError(f"{key} must be HH:MM.") from err
+                self.settings[key] = value or None
             elif key == SETTING_PROFILE_TAGS:
                 self.settings[key] = {
                     str(tag).strip(): str(profile)
@@ -471,6 +559,17 @@ class MedicationTrackerManager:
             "strength_options": medication.strength_options,
             "schedules": medication.schedules,
             "days_of_week": medication.days_of_week,
+            "interval_days": medication.interval_days,
+            "anchor_date": medication.anchor_date.isoformat() if medication.anchor_date else None,
+            "end_date": medication.end_date.isoformat() if medication.end_date else None,
+            "course_ended": bool(medication.end_date and today > medication.end_date),
+            "as_needed": medication.as_needed,
+            "max_doses_per_day": medication.max_doses_per_day,
+            "doses_today": sum(
+                1 for item in medication.dose_logs if dt_util.as_local(item.taken_at).date() == today
+            ),
+            "escalate_after_minutes": medication.escalate_after_minutes,
+            "last_taken_by": medication.dose_logs[-1].taken_by if medication.dose_logs else None,
             "dose_count": len(medication.dose_logs),
             "last_taken": last_dose.isoformat() if last_dose else None,
             "last_confirmed_by": last_confirmed_by,
@@ -609,11 +708,43 @@ class MedicationTrackerManager:
         doses.sort(key=lambda item: (item["scheduled_at"], item["profile_name"].lower(), item["medication_name"].lower()))
         return doses
 
-    def get_recent_logs(self, limit: int = 50) -> list[dict[str, Any]]:
+    def get_as_needed(self) -> list[dict[str, Any]]:
+        """Return as-needed medications with how many doses were taken today."""
+        now = dt_util.now()
+        rows: list[dict[str, Any]] = []
+        for medication in self.medications.values():
+            if not medication.as_needed:
+                continue
+            taken_today = sum(
+                1 for item in medication.dose_logs if dt_util.as_local(item.taken_at).date() == now.date()
+            )
+            at_limit = bool(medication.max_doses_per_day and taken_today >= medication.max_doses_per_day)
+            rows.append(
+                {
+                    "medication_id": medication.medication_id,
+                    "medication_name": medication.name,
+                    "profile_id": medication.profile_id,
+                    "profile_name": medication.profile_name,
+                    "dosage": medication.dosage,
+                    "doses_today": taken_today,
+                    "max_doses_per_day": medication.max_doses_per_day,
+                    "at_limit": at_limit,
+                    "last_taken": medication.dose_logs[-1].taken_at.isoformat() if medication.dose_logs else None,
+                    "duplicate_dose_warning": self._duplicate_dose_warning(medication, now),
+                }
+            )
+        rows.sort(key=lambda item: (item["profile_name"].lower(), item["medication_name"].lower()))
+        return rows
+
+    def get_recent_logs(self, limit: int = 50, days: int | None = None) -> list[dict[str, Any]]:
         """Return the newest dose logs across all medications."""
+        cutoff = dt_util.now() - timedelta(days=days) if days else None
         entries: list[dict[str, Any]] = []
         for medication in self.medications.values():
-            for dose_log in medication.dose_logs[-limit:]:
+            logs = medication.dose_logs if cutoff else medication.dose_logs[-limit:]
+            for dose_log in logs:
+                if cutoff and dt_util.as_local(dose_log.taken_at) < cutoff:
+                    continue
                 entries.append(
                     {
                         "medication_id": medication.medication_id,
@@ -622,6 +753,7 @@ class MedicationTrackerManager:
                         "taken_at": dose_log.taken_at.isoformat(),
                         "source": dose_log.source,
                         "confirmed_by": dose_log.confirmed_by,
+                        "taken_by": dose_log.taken_by,
                     }
                 )
         entries.sort(key=lambda item: item["taken_at"], reverse=True)
@@ -639,6 +771,8 @@ class MedicationTrackerManager:
         missed_alert_groups: dict[tuple[str, str, str | None], list[dict[str, Any]]] = defaultdict(list)
         refill_alert_groups: dict[tuple[str, str, str | None], list[dict[str, Any]]] = defaultdict(list)
         caregiver_alert_groups: dict[tuple[str, str, str | None], list[dict[str, Any]]] = defaultdict(list)
+        escalation_alert_groups: dict[tuple[str, str, str | None], list[dict[str, Any]]] = defaultdict(list)
+        quiet = self._in_quiet_hours(now)
         for medication in self.medications.values():
             if not medication.notification_enabled:
                 continue
@@ -693,7 +827,31 @@ class MedicationTrackerManager:
                     }
                 )
 
-            if self._needs_refill(medication):
+            if medication.escalate_after_minutes > 0:
+                escalation_service = medication.caregiver_notify_service or self.settings.get(
+                    SETTING_ESCALATION_NOTIFY
+                )
+                overdue = self._outstanding_occurrence(medication, now, state)
+                if escalation_service and overdue is not None and overdue <= now:
+                    threshold = self._effective_due_start(medication, overdue) + timedelta(
+                        minutes=medication.escalate_after_minutes
+                    )
+                    marker = overdue.isoformat()
+                    if now >= threshold and medication.last_escalation_notification != marker:
+                        escalation_alert_groups[(medication.profile_id, marker, escalation_service)].append(
+                            {
+                                "medication_id": medication.medication_id,
+                                "profile_id": medication.profile_id,
+                                "profile_name": medication.profile_name,
+                                "medication_name": medication.name,
+                                "dosage": medication.dosage,
+                                "notify_service": escalation_service,
+                                "scheduled_time": overdue,
+                            }
+                        )
+
+            # Refill reminders are not urgent, so they wait until quiet hours are over.
+            if self._needs_refill(medication) and not quiet:
                 refill_marker = now.date().isoformat()
                 if medication.last_refill_notification != refill_marker:
                     remaining = medication.quantity if medication.quantity is not None else 0
@@ -738,6 +896,8 @@ class MedicationTrackerManager:
             alerts.append(self._build_refill_alert(grouped_refill_medications))
         for grouped_caregiver_medications in caregiver_alert_groups.values():
             alerts.append(self._build_caregiver_alert(grouped_caregiver_medications))
+        for grouped_escalation_medications in escalation_alert_groups.values():
+            alerts.append(self._build_escalation_alert(grouped_escalation_medications))
 
         return alerts
 
@@ -754,6 +914,8 @@ class MedicationTrackerManager:
             if alert_type == "missed" and self._current_missed_schedule(medication, now, state):
                 return True
             if alert_type == "refill" and self._needs_refill(medication):
+                return True
+            if alert_type == "escalation" and self._outstanding_occurrence(medication, now, state):
                 return True
             if (
                 alert_type == "caregiver_confirmation"
@@ -789,6 +951,8 @@ class MedicationTrackerManager:
             medication.last_refill_notification = now.date().isoformat()
         elif alert_type == "caregiver_confirmation" and scheduled_time:
             medication.last_caregiver_notification = scheduled_time.isoformat()
+        elif alert_type == "escalation" and scheduled_time:
+            medication.last_escalation_notification = scheduled_time.isoformat()
         await self._async_save()
 
     async def _async_save(self) -> None:
@@ -806,7 +970,38 @@ class MedicationTrackerManager:
     # Schedule maths
     # ------------------------------------------------------------------
 
-    def _normalize_schedules(self, schedules: list[str]) -> list[str]:
+    def _parse_date(self, value: str, label: str) -> date | None:
+        """Parse an ISO date; an empty value means no date."""
+        if not value:
+            return None
+        try:
+            return date.fromisoformat(str(value)[:10])
+        except ValueError as err:
+            raise HomeAssistantError(f"{label} must be a date like 2026-12-31.") from err
+
+    def _in_quiet_hours(self, now: datetime) -> bool:
+        """Return whether the configured quiet hours are active."""
+        start = self.settings.get(SETTING_QUIET_START)
+        end = self.settings.get(SETTING_QUIET_END)
+        if not start or not end:
+            return False
+        try:
+            start_time, end_time = time.fromisoformat(start), time.fromisoformat(end)
+        except ValueError:
+            return False
+        current = now.timetz().replace(tzinfo=None)
+        if start_time <= end_time:
+            return start_time <= current < end_time
+        return current >= start_time or current < end_time
+
+    def _doses_per_day(self, medication: Medication) -> float:
+        """Average scheduled doses per day, allowing for weekdays and interval schedules."""
+        if medication.as_needed or not medication.schedules:
+            return 0.0
+        day_fraction = len(medication.days_of_week) / 7 if medication.days_of_week else 1.0
+        return len(medication.schedules) * day_fraction / max(medication.interval_days, 1)
+
+    def _normalize_schedules(self, schedules: list[str], allow_empty: bool = False) -> list[str]:
         """Normalize schedule strings."""
         normalized: set[str] = set()
         for value in schedules:
@@ -818,7 +1013,7 @@ class MedicationTrackerManager:
                 ) from err
             normalized.add(parsed_time.strftime("%H:%M"))
 
-        if not normalized:
+        if not normalized and not allow_empty:
             raise HomeAssistantError("At least one schedule time is required.")
 
         return sorted(normalized)
@@ -842,6 +1037,14 @@ class MedicationTrackerManager:
 
     def _is_scheduled_day(self, medication: Medication, day: date) -> bool:
         """Return whether the medication is scheduled on a calendar day."""
+        if medication.as_needed:
+            return False
+        if medication.end_date and day > medication.end_date:
+            return False
+        if medication.interval_days > 1:
+            anchor = medication.anchor_date or medication.start_date
+            if (day - anchor).days % medication.interval_days:
+                return False
         return not medication.days_of_week or day.weekday() in medication.days_of_week
 
     def _created_at(self, medication: Medication) -> datetime | None:
@@ -855,7 +1058,7 @@ class MedicationTrackerManager:
 
     def _next_scheduled_dose(self, medication: Medication, now: datetime) -> datetime | None:
         """Return the next scheduled dose datetime."""
-        for day_offset in range(0, 9):
+        for day_offset in range(0, MAX_INTERVAL_DAYS + 2):
             candidate_date = now.date() + timedelta(days=day_offset)
             if not self._is_scheduled_day(medication, candidate_date):
                 continue
@@ -872,14 +1075,10 @@ class MedicationTrackerManager:
         """Calculate how many days of medication remain."""
         if medication.quantity is None:
             return None
-
-        daily_doses = len(medication.schedules)
-        if daily_doses == 0:
+        per_day = self._doses_per_day(medication)
+        if per_day <= 0:
             return None
-
-        scheduled_days = len(medication.days_of_week) if medication.days_of_week else 7
-        doses_per_week = daily_doses * scheduled_days
-        return math.floor(medication.quantity / doses_per_week * 7)
+        return math.floor(medication.quantity / per_day)
 
     def _scheduled_occurrences(self, medication: Medication, start_date: date, end_date: date) -> list[datetime]:
         """Return every scheduled occurrence in a date range."""
@@ -911,9 +1110,10 @@ class MedicationTrackerManager:
         Each occurrence owns the period from shortly before it (so an early dose counts)
         until shortly before the next occurrence (so a late dose still counts for it).
         """
+        history_start = max(medication.start_date, now.date() - timedelta(days=HISTORY_WINDOW_DAYS))
         occurrences = self._scheduled_occurrences(
             medication,
-            medication.start_date,
+            history_start,
             now.date() + timedelta(days=2),
         )
         starts = self._window_starts(occurrences)
@@ -1190,6 +1390,34 @@ class MedicationTrackerManager:
             "notification_suffix": "_".join(medication_ids) if len(medication_ids) > 1 else None,
         }
 
+    def _build_escalation_alert(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+        """Build the alert sent to a caregiver when a dose is still not taken."""
+        items = sorted(items, key=lambda item: (item["scheduled_time"], item["medication_name"].lower()))
+        first = items[0]
+        ids = [item["medication_id"] for item in items]
+        when = first["scheduled_time"].strftime("%H:%M")
+        if len(items) == 1:
+            message = (
+                f"{first['profile_name']} has not taken {first['medication_name']} "
+                f"({first['dosage']}) due at {when}. Please check on them."
+            )
+        else:
+            lines = "\n".join(f"- {item['medication_name']} ({item['dosage']})" for item in items)
+            message = (
+                f"{first['profile_name']} has not taken {len(items)} medications due at {when}. "
+                f"Please check on them:\n{lines}"
+            )
+        return {
+            "type": "escalation",
+            "medication_id": first["medication_id"],
+            "medication_ids": ids,
+            "notify_service": first["notify_service"],
+            "scheduled_time": first["scheduled_time"],
+            "message": message,
+            "actions": self._build_actions("missed", items),
+            "notification_suffix": "_".join(ids) if len(ids) > 1 else None,
+        }
+
     def _effective_due_start(self, medication: Medication, scheduled_time: datetime) -> datetime:
         """Return the effective due start, including any active snooze."""
         snoozed_until = self._active_snoozed_until(medication, dt_util.now())
@@ -1239,15 +1467,12 @@ class MedicationTrackerManager:
         """Estimate when stock will run out based on current quantity and schedule."""
         if medication.quantity is None:
             return None
-        daily_doses = len(medication.schedules)
-        if daily_doses <= 0:
-            return None
-        days_remaining = self._days_remaining(medication)
-        if days_remaining is None:
+        per_day = self._doses_per_day(medication)
+        if per_day <= 0:
             return None
         # Anchor to the start of the day so the date does not creep forward every minute.
         anchor = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        return anchor + timedelta(days=medication.quantity / (daily_doses * (len(medication.days_of_week) if medication.days_of_week else 7)) * 7)
+        return anchor + timedelta(days=medication.quantity / per_day)
 
     def _stock_status(
         self,

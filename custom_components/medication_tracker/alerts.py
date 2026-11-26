@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
 
 from .const import (
@@ -22,14 +23,22 @@ from .const import (
     DOMAIN,
     EVENT_CAREGIVER_CONFIRMATION,
     EVENT_DOSE_DUE,
+    EVENT_DOSE_ESCALATED,
     EVENT_DOSE_MISSED,
     EVENT_REFILL_NEEDED,
+    SETTING_ANNOUNCE_HOME_ENTITY,
+    SETTING_ANNOUNCE_SERVICE,
+    SETTING_CRITICAL,
     SETTING_FALLBACK_NOTIFY,
     SIGNAL_ALERTS_UPDATED,
 )
 from .manager import MedicationTrackerManager
 
 _LOGGER = logging.getLogger(__name__)
+
+# Alert types that are time-sensitive enough to use the loud, alarm-style notification.
+CRITICAL_TYPES = {"due", "missed", "escalation"}
+ALARM_CHANNEL = "alarm_stream"
 
 
 class MedicationAlertEngine:
@@ -100,6 +109,13 @@ class MedicationAlertEngine:
                 f"Test notification: {caregiver_name} should confirm the latest "
                 f"{medication.name} dose for {medication.profile_name}."
             )
+        elif alert_type == "escalation":
+            scheduled_time = datetime.now().astimezone()
+            notify_service = medication.caregiver_notify_service or self.manager.settings.get("escalation_notify_service")
+            message = (
+                f"Test notification: {medication.profile_name} has not taken "
+                f"{medication.name} ({medication.dosage}). Please check on them."
+            )
         else:
             return False
 
@@ -133,6 +149,7 @@ class MedicationAlertEngine:
             notification_id=notification_id,
         )
 
+        critical = alert["type"] in CRITICAL_TYPES and bool(self.manager.settings.get(SETTING_CRITICAL, True))
         delivered = True
         notify_service = alert.get("notify_service")
         used_service = None
@@ -143,6 +160,7 @@ class MedicationAlertEngine:
                 message=message,
                 notification_tag=notification_id,
                 actions=alert.get("actions"),
+                critical=critical,
             )
             used_service = notify_service if delivered else None
             if not delivered:
@@ -154,6 +172,7 @@ class MedicationAlertEngine:
                         message=message,
                         notification_tag=notification_id,
                         actions=alert.get("actions"),
+                        critical=critical,
                     )
                     used_service = fallback if delivered else None
 
@@ -170,8 +189,13 @@ class MedicationAlertEngine:
             ATTR_NOTIFICATION_MESSAGE: message,
             ATTR_SCHEDULED_TIME: scheduled_time.isoformat() if isinstance(scheduled_time, datetime) else None,
         }
+        if alert["type"] in ("due", "missed", "escalation"):
+            await self._async_announce(alert)
+
         if alert["type"] == "due":
             self.hass.bus.async_fire(EVENT_DOSE_DUE, event_payload)
+        elif alert["type"] == "escalation":
+            self.hass.bus.async_fire(EVENT_DOSE_ESCALATED, event_payload)
         elif alert["type"] == "missed":
             self.hass.bus.async_fire(EVENT_DOSE_MISSED, event_payload)
         elif alert["type"] == "refill":
@@ -179,6 +203,38 @@ class MedicationAlertEngine:
         elif alert["type"] == "caregiver_confirmation":
             self.hass.bus.async_fire(EVENT_CAREGIVER_CONFIRMATION, event_payload)
         return delivered
+
+    async def _async_announce(self, alert: dict) -> None:
+        """Speak the reminder on a smart speaker (for example an Alexa notify service)."""
+        settings = self.manager.settings
+        service = settings.get(SETTING_ANNOUNCE_SERVICE)
+        if not service or "." not in service or alert["type"] == "escalation":
+            return
+        if self.manager._in_quiet_hours(dt_util.now()):
+            return
+        home_entity = settings.get(SETTING_ANNOUNCE_HOME_ENTITY)
+        if home_entity:
+            state = self.hass.states.get(home_entity)
+            if state is None or state.state != "home":
+                return
+        ids = alert.get("medication_ids", [alert["medication_id"]])
+        medications = [self.manager.medications[i] for i in ids if i in self.manager.medications]
+        if not medications:
+            return
+        names = " and ".join(", ".join(m.name for m in medications).rsplit(", ", 1))
+        who = medications[0].profile_name
+        spoken = (
+            f"Medication reminder. {who}, please take {names}."
+            if alert["type"] == "due"
+            else f"{who} has missed {names}."
+        )
+        domain, name = service.split(".", 1)
+        try:
+            await self.hass.services.async_call(
+                domain, name, {"message": spoken, "data": {"type": "announce"}}, blocking=True
+            )
+        except Exception:  # noqa: BLE001 - announcements are best effort
+            _LOGGER.debug("Announcement via %s failed", service, exc_info=True)
 
     async def _async_clear(self, notification_id: str) -> None:
         """Remove a persistent notification and clear it from the phone too."""
@@ -232,6 +288,7 @@ class MedicationAlertEngine:
         message: str,
         notification_tag: str | None = None,
         actions: list[dict[str, str]] | None = None,
+        critical: bool = False,
     ) -> bool:
         """Send a mobile app notification with action buttons. Never raises."""
         if "." not in notify_service:
@@ -247,6 +304,18 @@ class MedicationAlertEngine:
                 or [{"action": f"{ACTION_CONFIRMED_PREFIX}{medication_id}", "title": "Taken"}],
             },
         }
+        if critical:
+            # Android: use the alarm volume, deliver immediately, and stay on screen until acted on.
+            payload["data"].update(
+                {
+                    "channel": ALARM_CHANNEL,
+                    "importance": "high",
+                    "priority": "high",
+                    "ttl": 0,
+                    "sticky": "true",
+                    "visibility": "public",
+                }
+            )
         try:
             await self.hass.services.async_call(domain, service, payload, blocking=True)
         except (HomeAssistantError, Exception) as err:  # noqa: BLE001

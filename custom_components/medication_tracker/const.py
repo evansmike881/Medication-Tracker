@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 DOMAIN = "medication_tracker"
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 PLATFORMS = ["binary_sensor", "button", "calendar", "sensor"]
 STORAGE_KEY = DOMAIN
 STORAGE_VERSION = 1
@@ -16,6 +16,7 @@ EVENT_REFILL_NEEDED = f"{DOMAIN}_refill_needed"
 EVENT_NFC_LOGGED = f"{DOMAIN}_nfc_logged"
 EVENT_CAREGIVER_CONFIRMATION = f"{DOMAIN}_caregiver_confirmation"
 EVENT_DOSE_TAKEN = f"{DOMAIN}_dose_taken"
+EVENT_DOSE_ESCALATED = f"{DOMAIN}_dose_escalated"
 
 # Mobile app notification action prefixes.
 ACTION_CONFIRMED_PREFIX = "MEDICATION_CONFIRMED_"
@@ -126,9 +127,26 @@ SETTING_DEFAULT_NOTIFY = "default_notify_service"
 SETTING_FALLBACK_NOTIFY = "fallback_notify_service"
 SETTING_ALL_TAG_IDS = "all_tag_ids"
 SETTING_PROFILE_TAGS = "profile_tags"
+SETTING_ESCALATION_NOTIFY = "escalation_notify_service"
+SETTING_CRITICAL = "critical_notifications"
+SETTING_ANNOUNCE_SERVICE = "announce_service"
+SETTING_ANNOUNCE_HOME_ENTITY = "announce_only_when_home_entity"
+SETTING_QUIET_START = "quiet_hours_start"
+SETTING_QUIET_END = "quiet_hours_end"
+
+# Limits
+HISTORY_WINDOW_DAYS = 365  # how far back doses are matched against the schedule
+LOG_RETENTION_DAYS = 730  # dose logs older than this are dropped on startup
+MAX_INTERVAL_DAYS = 30
 DEFAULT_SETTINGS = {
     SETTING_DEFAULT_NOTIFY: None,
     SETTING_FALLBACK_NOTIFY: None,
     SETTING_ALL_TAG_IDS: [],
     SETTING_PROFILE_TAGS: {},
+    SETTING_ESCALATION_NOTIFY: None,
+    SETTING_CRITICAL: True,
+    SETTING_ANNOUNCE_SERVICE: None,
+    SETTING_ANNOUNCE_HOME_ENTITY: None,
+    SETTING_QUIET_START: None,
+    SETTING_QUIET_END: None,
 }

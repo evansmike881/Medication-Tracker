@@ -49,6 +49,12 @@
     caregiver_notify_service: "",
     confirmation_required: false,
     database_entry_id: null,
+    as_needed: false,
+    max_doses_per_day: "",
+    interval_days: 1,
+    anchor_date: "",
+    end_date: "",
+    escalate_after_minutes: 0,
   });
 
   const formFromSnapshot = (s) => ({
@@ -76,6 +82,12 @@
     caregiver_notify_service: s.caregiver_notify_service || "",
     confirmation_required: !!s.confirmation_required,
     database_entry_id: s.database_entry_id || null,
+    as_needed: !!s.as_needed,
+    max_doses_per_day: s.max_doses_per_day ?? "",
+    interval_days: s.interval_days ?? 1,
+    anchor_date: s.anchor_date || "",
+    end_date: s.end_date || "",
+    escalate_after_minutes: s.escalate_after_minutes ?? 0,
   });
 
   const num = (value) => (value === "" || value === null || value === undefined ? null : Number(value));
@@ -197,13 +209,20 @@
       this._load();
     }
 
+    _toastHtml() {
+      return this._toast ? `<div class="toast ${this._toast.error ? "err" : ""}">${esc(this._toast.message)}</div>` : "";
+    }
+
     _say(message, error = false) {
+      // Only touch the toast element: re-rendering everything would steal focus from a field being typed in.
       this._toast = { message, error };
-      this._render();
+      const box = this.shadowRoot.querySelector(".toastbox");
+      if (box) box.innerHTML = this._toastHtml();
       clearTimeout(this._toastTimer);
       this._toastTimer = setTimeout(() => {
         this._toast = null;
-        this._render();
+        const el = this.shadowRoot.querySelector(".toastbox");
+        if (el) el.innerHTML = "";
       }, 4000);
     }
 
@@ -248,6 +267,30 @@
             { type: "medication_tracker/take_all", ...(profile ? { profile_id: profile } : {}) },
             "Marked everything due as taken"
           );
+          break;
+        case "take-earlier": {
+          const answer = window.prompt("What time did you take it today? (HH:MM, 24-hour)", "");
+          const match = /^(\d{1,2}):(\d{2})$/.exec((answer || "").trim());
+          if (!match) {
+            if (answer) this._say("Please enter a time like 08:15", true);
+            break;
+          }
+          const when = new Date();
+          when.setHours(Number(match[1]), Number(match[2]), 0, 0);
+          if (when > new Date()) when.setDate(when.getDate() - 1);
+          this._run(
+            { type: "medication_tracker/take", medication_id: id, taken_at: when.toISOString() },
+            "Marked as taken"
+          );
+          break;
+        }
+        case "undo":
+          if (window.confirm("Undo the last logged dose of this medication?")) {
+            this._run({ type: "medication_tracker/undo_last", medication_id: id }, "Dose undone");
+          }
+          break;
+        case "export-csv":
+          this._exportCsv();
           break;
         case "skip":
           this._run({ type: "medication_tracker/skip", medication_id: id }, "Skipped");
@@ -366,6 +409,12 @@
               fallback_notify_service: this._settingsDraft.fallback_notify_service || null,
               all_tag_ids: this._settingsDraft.all_tag_ids || [],
               profile_tags: this._settingsDraft.profile_tags || {},
+              escalation_notify_service: this._settingsDraft.escalation_notify_service || null,
+              critical_notifications: this._settingsDraft.critical_notifications !== false,
+              announce_service: this._settingsDraft.announce_service || null,
+              announce_only_when_home_entity: this._settingsDraft.announce_only_when_home_entity || null,
+              quiet_hours_start: this._settingsDraft.quiet_hours_start || null,
+              quiet_hours_end: this._settingsDraft.quiet_hours_end || null,
             },
             "Settings saved"
           );
@@ -391,11 +440,12 @@
       }
       if (el.dataset.field && this._form) {
         this._form[el.dataset.field] = el.type === "checkbox" ? el.checked : el.value;
+        if (el.dataset.field === "as_needed" && event.type === "change") this._render();
         if (el.dataset.field === "medication_name") this._maybeFillFromDatabase(el.value);
         return;
       }
       if (el.dataset.setting && this._settingsDraft) {
-        this._settingsDraft[el.dataset.setting] = el.value || null;
+        this._settingsDraft[el.dataset.setting] = el.type === "checkbox" ? el.checked : el.value || null;
       }
       if (el.dataset.profileTag !== undefined && this._settingsDraft) {
         const profile = el.dataset.profileTag;
@@ -447,16 +497,24 @@
       const f = this._form;
       if (!f.profile_name.trim()) return this._say("Who is this medication for?", true);
       if (!f.medication_name.trim()) return this._say("Enter the medication name", true);
-      if (!f.schedules.length || f.schedules.some((t) => !t)) return this._say("Add at least one time", true);
-      if (!f.days.length) return this._say("Choose at least one day", true);
+      if (!f.as_needed) {
+        if (!f.schedules.length || f.schedules.some((t) => !t)) return this._say("Add at least one time", true);
+        if (!f.days.length) return this._say("Choose at least one day", true);
+      }
       const msg = {
         type: "medication_tracker/save_medication",
         medication_id: f.medication_id || null,
         profile_name: f.profile_name.trim(),
         medication_name: f.medication_name.trim(),
         dosage: f.dosage.trim() || "1 dose",
-        schedules: f.schedules,
-        days_of_week: f.days.length === 7 ? null : f.days,
+        schedules: f.as_needed ? [] : f.schedules,
+        days_of_week: f.as_needed || f.days.length === 7 ? null : f.days,
+        as_needed: !!f.as_needed,
+        max_doses_per_day: Number(f.max_doses_per_day) || 0,
+        interval_days: Number(f.interval_days) || 1,
+        anchor_date: f.anchor_date || null,
+        end_date: f.end_date || null,
+        escalate_after_minutes: Number(f.escalate_after_minutes) || 0,
         quantity: num(f.quantity),
         refill_at: num(f.refill_at),
         notes: f.notes,
@@ -483,6 +541,29 @@
           this._render();
         }
       });
+    }
+
+    async _exportCsv() {
+      try {
+        const { logs } = await this._call({ type: "medication_tracker/get_history", days: 365 });
+        const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+        const lines = [["When", "Person", "Medication", "Via", "Taken by"].map(cell).join(",")];
+        for (const l of logs) {
+          lines.push([l.taken_at, l.profile_name, l.medication_name, l.source, l.taken_by].map(cell).join(","));
+        }
+        const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "medication-history.csv";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        this._say(`Exported ${logs.length} doses`);
+      } catch (err) {
+        this._say((err && err.message) || "Export failed", true);
+      }
     }
 
     // ---------------------------------------------------------------- render
@@ -512,7 +593,7 @@
       ]
         .map(([key, label]) => `<button class="tab ${this._tab === key ? "active" : ""}" data-action="tab" data-tab="${key}">${label}</button>`)
         .join("");
-      const toast = this._toast ? `<div class="toast ${this._toast.error ? "err" : ""}">${esc(this._toast.message)}</div>` : "";
+      const toast = `<div class="toastbox">${this._toastHtml()}</div>`;
       const scrollTop = this.scrollTop;
       root.innerHTML = `<style>${STYLE}</style>
         <div class="bar">${this._narrow ? '<button class="menu" data-action="menu" aria-label="Menu">☰</button>' : ""}<h1>Medications</h1></div>
@@ -544,18 +625,37 @@
       }
       const byProfile = {};
       for (const dose of doses) (byProfile[dose.profile_name] ||= { id: dose.profile_id, doses: [] }).doses.push(dose);
-      if (!doses.length) parts.push(`<div class="card empty">Nothing scheduled today.</div>`);
+      const asNeeded = s.as_needed || [];
+      if (!doses.length && !asNeeded.length) parts.push(`<div class="card empty">Nothing scheduled today.</div>`);
+      if (asNeeded.length) {
+        const rows = asNeeded
+          .map((m) => {
+            const count = m.max_doses_per_day ? `${m.doses_today} of ${m.max_doses_per_day} today` : `${m.doses_today} today`;
+            const note = m.at_limit ? "Daily limit reached" : m.duplicate_dose_warning || "";
+            return `<div class="row"><div class="grow"><div>${esc(m.medication_name)} <span class="sub">${esc(m.profile_name)}</span></div>
+              <div class="sub">${esc(m.dosage)} · ${esc(count)}${note ? " · " + esc(note) : ""}</div></div>
+              <div class="actions"><button class="btn" data-action="take" data-id="${esc(m.medication_id)}" ${m.at_limit ? "disabled" : ""}>Take</button>
+              <button class="btn secondary" data-action="take-earlier" data-id="${esc(m.medication_id)}" ${m.at_limit ? "disabled" : ""}>Earlier…</button>
+              ${m.doses_today ? `<button class="btn secondary" data-action="undo" data-id="${esc(m.medication_id)}">Undo</button>` : ""}</div></div>`;
+          })
+          .join("");
+        parts.push(`<div class="card"><h2>As needed</h2>${rows}</div>`);
+      }
       for (const [name, group] of Object.entries(byProfile)) {
         const canTake = group.doses.filter((d) => d.can_take).length;
         const rows = group.doses
           .map((d) => {
             const cls = STATUS_CLASS[d.status] || "muted";
             const label = STATUS_LABEL[d.status] || d.status;
-            const actions = d.can_take
-              ? `<div class="actions"><button class="btn" data-action="take" data-id="${esc(d.medication_id)}">Taken</button>
+            let actions = "";
+            if (d.can_take) {
+              actions = `<div class="actions"><button class="btn" data-action="take" data-id="${esc(d.medication_id)}">Taken</button>
+                 <button class="btn secondary" data-action="take-earlier" data-id="${esc(d.medication_id)}">Earlier…</button>
                  <button class="btn secondary" data-action="snooze" data-id="${esc(d.medication_id)}" data-minutes="10">Snooze 10m</button>
-                 <button class="btn secondary" data-action="skip" data-id="${esc(d.medication_id)}">Skip</button></div>`
-              : "";
+                 <button class="btn secondary" data-action="skip" data-id="${esc(d.medication_id)}">Skip</button></div>`;
+            } else if (d.status === "Taken") {
+              actions = `<div class="actions"><button class="btn secondary" data-action="undo" data-id="${esc(d.medication_id)}">Undo</button></div>`;
+            }
             return `<div class="row"><span class="time">${esc(d.time)}</span>
               <div class="grow"><div>${esc(d.medication_name)}</div><div class="sub">${esc(d.dosage)}</div></div>
               <span class="chip ${cls}">${esc(label)}</span>${actions}</div>`;
@@ -590,9 +690,14 @@
             <div class="hero"><div><h2 style="margin:0">${esc(m.medication_name)} <span class="sub">${esc(m.dosage)}</span></h2>
             <div class="sub">${esc(m.profile_name)}${m.purpose ? " · " + esc(m.purpose) : ""}</div></div>
             ${m.needs_refill ? '<span class="chip warn">Refill needed</span>' : ""}</div>
-            <div class="sub" style="margin-top:8px">⏰ ${esc((m.schedules || []).join(", "))} · ${esc(days)}</div>
+            <div class="sub" style="margin-top:8px">${
+              m.as_needed
+                ? `As needed${m.max_doses_per_day ? ` (max ${esc(m.max_doses_per_day)} per day)` : ""}`
+                : `⏰ ${esc((m.schedules || []).join(", "))} · ${esc(m.interval_days > 1 ? "every " + m.interval_days + " days" : days)}`
+            }${m.end_date ? ` · ${m.course_ended ? "course ended" : "until"} ${esc(m.end_date)}` : ""}</div>
             <div class="sub">📦 ${esc(stock)}${m.nfc_tag_id ? " · 🏷 NFC tag set" : ""}</div>
-            <div class="sub">Next: ${esc(fmtDateTime(m.next_dose))} · Last taken: ${esc(fmtDateTime(m.last_taken))}</div>
+            <div class="sub">Next: ${esc(fmtDateTime(m.next_dose))} · Last taken: ${esc(fmtDateTime(m.last_taken))}${m.last_taken_by ? " by " + esc(m.last_taken_by) : ""}</div>
+            ${m.as_needed ? "" : `<div class="sub">Adherence ${esc(m.compliance_percentage)}% · ${esc(m.missed_doses)} missed</div>`}
             <div class="actions" style="margin-top:12px">
               <button class="btn secondary" data-action="refill" data-id="${esc(m.medication_id)}">Add stock</button>
               ${admin ? `<button class="btn secondary" data-action="edit" data-id="${esc(m.medication_id)}">Edit</button>
@@ -639,8 +744,18 @@
           ${field("dosage", "Dose", 'placeholder="e.g. 1 tablet"')}
         </div>
         <h2 style="margin-top:16px">When</h2>
-        <div class="times">${times}<button class="btn secondary" data-action="add-time">+ Add time</button></div>
+        <label class="field" style="flex-direction:row;align-items:center;gap:8px;margin-bottom:8px"><input type="checkbox" data-field="as_needed" ${f.as_needed ? "checked" : ""}> As needed (no fixed times, e.g. paracetamol)</label>
+        ${
+          f.as_needed
+            ? `<div class="grid">${field("max_doses_per_day", "Most doses per day (blank = no limit)", 'type="number" min="0" max="48"')}</div>`
+            : `<div class="times">${times}<button class="btn secondary" data-action="add-time">+ Add time</button></div>
         <div class="days" style="margin-top:12px">${days}</div>
+        <div class="grid" style="margin-top:12px">
+          ${field("interval_days", "Repeat every N days (1 = daily)", 'type="number" min="1" max="30"')}
+          <label class="field">First day (only for every-N-days)<input type="date" data-field="anchor_date" value="${esc(f.anchor_date)}"></label>
+        </div>`
+        }
+        <div class="grid" style="margin-top:12px"><label class="field">Course ends (optional)<input type="date" data-field="end_date" value="${esc(f.end_date)}"></label></div>
         <h2 style="margin-top:16px">Stock</h2>
         <div class="grid">
           ${field("quantity", "Doses left (optional)", 'type="number" min="0" step="1"')}
@@ -666,6 +781,7 @@
             ${field("purpose", "Purpose")}
             ${field("instructions", "Instructions")}
             ${field("notes", "Notes")}
+            ${field("escalate_after_minutes", "Tell caregiver if not taken after (min, 0 = off)", 'type="number" min="0" max="1440"')}
             ${field("caregiver_name", "Caregiver name")}
             <label class="field">Caregiver notify service<select data-field="caregiver_notify_service">${this._notifyOptions(f.caregiver_notify_service, "Same as above")}</select></label>
           </div>
@@ -681,16 +797,24 @@
 
     _renderHistory() {
       const logs = this._state.recent_logs || [];
-      if (!logs.length) return `<div class="card empty">No doses logged yet.</div>`;
       const admin = this._isAdmin;
+      const scheduled = this._state.medications.filter((m) => !m.as_needed);
+      const adherence = scheduled.length
+        ? `<div class="card"><h2>Adherence</h2><table><tr><th>Medication</th><th>Who</th><th>Taken on schedule</th><th>Missed</th></tr>${scheduled
+            .map(
+              (m) => `<tr><td>${esc(m.medication_name)}</td><td>${esc(m.profile_name)}</td><td>${esc(m.compliance_percentage)}%</td><td>${esc(m.missed_doses)}</td></tr>`
+            )
+            .join("")}</table></div>`
+        : "";
+      if (!logs.length) return adherence + `<div class="card empty">No doses logged yet.</div>`;
       const rows = logs
         .map(
           (l) => `<tr><td>${esc(fmtDateTime(l.taken_at))}</td><td>${esc(l.profile_name)}</td><td>${esc(l.medication_name)}</td>
-            <td class="hide-narrow">${esc(l.source)}</td>
+            <td class="hide-narrow">${esc(l.source)}${l.taken_by ? " · " + esc(l.taken_by) : ""}</td>
             <td>${admin ? `<button class="btn danger" style="padding:4px 10px" data-action="delete-dose" data-id="${esc(l.medication_id)}" data-taken-at="${esc(l.taken_at)}">Delete</button>` : ""}</td></tr>`
         )
         .join("");
-      return `<div class="card"><h2>Recent doses</h2><table><tr><th>When</th><th>Who</th><th>Medication</th><th class="hide-narrow">Via</th><th></th></tr>${rows}</table></div>`;
+      return `${adherence}<div class="card"><div class="hero"><h2>Recent doses</h2><button class="btn secondary" data-action="export-csv">Export CSV</button></div><table><tr><th>When</th><th>Who</th><th>Medication</th><th class="hide-narrow">Via / by</th><th></th></tr>${rows}</table></div>`;
     }
 
     _renderSettings() {
@@ -715,6 +839,17 @@
             <label class="field">Default phone<select data-setting="default_notify_service" ${admin ? "" : "disabled"}>${this._notifyOptions(d.default_notify_service, "None")}</select></label>
             <label class="field">Backup phone (if the first fails)<select data-setting="fallback_notify_service" ${admin ? "" : "disabled"}>${this._notifyOptions(d.fallback_notify_service, "None")}</select></label>
           </div></div>
+        <div class="card"><h2>Reminders</h2>
+          <label class="field" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" data-setting="critical_notifications" ${d.critical_notifications !== false ? "checked" : ""} ${admin ? "" : "disabled"}> Loud alarm-style notifications for due, missed and escalated doses (Android)</label>
+          <div class="grid" style="margin-top:12px">
+            <label class="field">Tell this phone when a dose is overdue<select data-setting="escalation_notify_service" ${admin ? "" : "disabled"}>${this._notifyOptions(d.escalation_notify_service, "Nobody")}</select></label>
+            <label class="field">Speak reminders on (e.g. an Alexa notify service)<select data-setting="announce_service" ${admin ? "" : "disabled"}>${this._notifyOptions(d.announce_service, "Don't announce")}</select></label>
+            <label class="field">Only announce when this person is home<input data-setting="announce_only_when_home_entity" value="${esc(d.announce_only_when_home_entity || "")}" placeholder="person.mike" ${admin ? "" : "disabled"}></label>
+            <label class="field">Quiet hours start<input type="time" data-setting="quiet_hours_start" value="${esc(d.quiet_hours_start || "")}" ${admin ? "" : "disabled"}></label>
+            <label class="field">Quiet hours end<input type="time" data-setting="quiet_hours_end" value="${esc(d.quiet_hours_end || "")}" ${admin ? "" : "disabled"}></label>
+          </div>
+          <div class="sub" style="margin-top:8px">Quiet hours silence announcements and refill reminders. Dose reminders to your phone are never silenced.</div>
+        </div>
         <div class="card"><h2>NFC tags</h2>${scanning}
           <div class="sub" style="margin-bottom:8px">Write a tag in the Companion app (Settings → Tags), then press Scan here and tap it. A medication's own tag is set on its edit page.</div>
           <h2 style="margin-top:12px;font-size:14px">Tags that mark everything due as taken</h2>${allTags || '<div class="sub">None yet.</div>'}

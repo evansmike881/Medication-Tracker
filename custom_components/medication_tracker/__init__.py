@@ -68,9 +68,15 @@ from .const import (
     PANEL_URL_PATH,
     PLATFORMS,
     SETTING_ALL_TAG_IDS,
+    SETTING_ANNOUNCE_HOME_ENTITY,
+    SETTING_ANNOUNCE_SERVICE,
+    SETTING_CRITICAL,
     SETTING_DEFAULT_NOTIFY,
+    SETTING_ESCALATION_NOTIFY,
     SETTING_FALLBACK_NOTIFY,
     SETTING_PROFILE_TAGS,
+    SETTING_QUIET_END,
+    SETTING_QUIET_START,
     VERSION,
 )
 from .coordinator import MedicationTrackerCoordinator
@@ -79,9 +85,11 @@ from .manager import MedicationTrackerManager
 from .runtime import (
     async_refresh,
     async_skip,
+    async_context_user_name,
     async_snooze,
     async_take,
     async_take_all,
+    async_undo_last,
     get_runtime,
 )
 from .websocket_api import async_register_commands
@@ -92,6 +100,7 @@ CARD_PATH = f"{ASSET_BASE_URL}/medication-tracker-card.js"
 CARD_PATH_V2 = f"{ASSET_BASE_URL}/medication-tracker-cards-v2.js"
 CARD_PATH_V3 = f"{ASSET_BASE_URL}/medication-tracker-cards-v3.js"
 PANEL_JS_PATH = f"{ASSET_BASE_URL}/medication-tracker-panel.js"
+TODAY_CARD_PATH = f"{ASSET_BASE_URL}/medication-tracker-today-card.js"
 
 SERVICE_ADD_MEDICATION = "add_medication"
 SERVICE_LOG_DOSE = "log_dose"
@@ -103,6 +112,7 @@ SERVICE_RESET_HISTORY = "reset_history"
 SERVICE_SKIP_MEDICATION = "skip_medication"
 SERVICE_SNOOZE_MEDICATION = "snooze_medication"
 SERVICE_UPDATE_SETTINGS = "update_settings"
+SERVICE_UNDO_LAST_DOSE = "undo_last_dose"
 SERVICE_NAMES = (
     SERVICE_ADD_MEDICATION,
     SERVICE_LOG_DOSE,
@@ -114,6 +124,7 @@ SERVICE_NAMES = (
     SERVICE_SKIP_MEDICATION,
     SERVICE_SNOOZE_MEDICATION,
     SERVICE_UPDATE_SETTINGS,
+    SERVICE_UNDO_LAST_DOSE,
 )
 
 MEDICATION_ENTITY_SUFFIXES = tuple(
@@ -135,7 +146,7 @@ ADD_MEDICATION_SCHEMA = vol.Schema(
         vol.Required(ATTR_MEDICATION_ID): cv.string,
         vol.Required(ATTR_MEDICATION_NAME): cv.string,
         vol.Required(ATTR_DOSAGE): cv.string,
-        vol.Required(ATTR_SCHEDULES): vol.All([cv.string], vol.Length(min=1)),
+        vol.Required(ATTR_SCHEDULES): [cv.string],
         vol.Optional(ATTR_QUANTITY): vol.Coerce(float),
         vol.Optional(ATTR_REFILL_AT): vol.Coerce(float),
         vol.Optional(ATTR_NOTES, default=""): cv.string,
@@ -157,6 +168,12 @@ ADD_MEDICATION_SCHEMA = vol.Schema(
         vol.Optional(ATTR_DAYS_OF_WEEK): vol.All(
             cv.ensure_list, [vol.All(vol.Coerce(int), vol.Range(min=0, max=6))]
         ),
+        vol.Optional("end_date"): cv.string,
+        vol.Optional("as_needed"): cv.boolean,
+        vol.Optional("max_doses_per_day"): vol.All(vol.Coerce(int), vol.Range(min=0, max=48)),
+        vol.Optional("interval_days"): vol.All(vol.Coerce(int), vol.Range(min=1, max=30)),
+        vol.Optional("anchor_date"): cv.string,
+        vol.Optional("escalate_after_minutes"): vol.All(vol.Coerce(int), vol.Range(min=0, max=1440)),
     }
 )
 
@@ -207,8 +224,15 @@ SKIP_MEDICATION_SCHEMA = vol.Schema(
         vol.Optional(ATTR_SCHEDULED_TIME): cv.datetime,
     }
 )
+UNDO_LAST_DOSE_SCHEMA = vol.Schema({vol.Required(ATTR_MEDICATION_ID): cv.string})
 UPDATE_SETTINGS_SCHEMA = vol.Schema(
     {
+        vol.Optional(SETTING_ESCALATION_NOTIFY): vol.Any(None, cv.string),
+        vol.Optional(SETTING_CRITICAL): cv.boolean,
+        vol.Optional(SETTING_ANNOUNCE_SERVICE): vol.Any(None, cv.string),
+        vol.Optional(SETTING_ANNOUNCE_HOME_ENTITY): vol.Any(None, cv.string),
+        vol.Optional(SETTING_QUIET_START): vol.Any(None, cv.string),
+        vol.Optional(SETTING_QUIET_END): vol.Any(None, cv.string),
         vol.Optional(SETTING_DEFAULT_NOTIFY): vol.Any(None, cv.string),
         vol.Optional(SETTING_FALLBACK_NOTIFY): vol.Any(None, cv.string),
         vol.Optional(SETTING_ALL_TAG_IDS): vol.All(cv.ensure_list, [cv.string]),
@@ -293,6 +317,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             source=call.data.get(ATTR_SOURCE, "manual"),
             confirmed_by=call.data.get(ATTR_CONFIRMED_BY),
             allow_duplicate=call.data.get("allow_duplicate", False),
+            taken_by=await async_context_user_name(hass, call.context),
         )
 
     async def handle_log_all_due(call: ServiceCall) -> None:
@@ -302,7 +327,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             medication_ids=call.data.get(ATTR_MEDICATION_IDS),
             source=call.data.get(ATTR_SOURCE, "manual"),
             confirmed_by=call.data.get(ATTR_CONFIRMED_BY),
+            taken_by=await async_context_user_name(hass, call.context),
         )
+
+    async def handle_undo_last_dose(call: ServiceCall) -> None:
+        await async_undo_last(hass, call.data[ATTR_MEDICATION_ID])
 
     async def handle_delete_dose(call: ServiceCall) -> None:
         runtime = get_runtime(hass)
@@ -355,6 +384,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         (SERVICE_SNOOZE_MEDICATION, handle_snooze_medication, SNOOZE_MEDICATION_SCHEMA),
         (SERVICE_SKIP_MEDICATION, handle_skip_medication, SKIP_MEDICATION_SCHEMA),
         (SERVICE_UPDATE_SETTINGS, handle_update_settings, UPDATE_SETTINGS_SCHEMA),
+        (SERVICE_UNDO_LAST_DOSE, handle_undo_last_dose, UNDO_LAST_DOSE_SCHEMA),
     ):
         hass.services.async_register(DOMAIN, name, handler, schema=schema)
 
@@ -389,6 +419,7 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     frontend_dir = Path(__file__).parent / "frontend"
     card_file = frontend_dir / "medication-tracker-card.js"
     panel_file = frontend_dir / "medication-tracker-panel.js"
+    today_card_file = frontend_dir / "medication-tracker-today-card.js"
     await hass.http.async_register_static_paths(
         [
             StaticPathConfig(CARD_PATH, str(card_file), cache_headers=False),
@@ -396,9 +427,11 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
             # Existing dashboards reference the v3 filename.
             StaticPathConfig(CARD_PATH_V3, str(card_file), cache_headers=False),
             StaticPathConfig(PANEL_JS_PATH, str(panel_file), cache_headers=False),
+            StaticPathConfig(TODAY_CARD_PATH, str(today_card_file), cache_headers=False),
         ]
     )
     add_extra_js_url(hass, f"{CARD_PATH_V3}?v={VERSION}")
+    add_extra_js_url(hass, f"{TODAY_CARD_PATH}?v={VERSION}")
     hass.data[DOMAIN]["frontend_registered"] = True
 
 
@@ -447,14 +480,16 @@ async def _async_handle_tag_scanned(hass: HomeAssistant, event: Event) -> None:
         if target is None:
             return
         kind, value = target
+        who = await async_context_user_name(hass, event.context)
         if kind == "medication":
-            await async_take(hass, value.medication_id, source="nfc")
+            await async_take(hass, value.medication_id, source="nfc", taken_by=who)
             medication_ids = [value.medication_id]
         else:
             result = await async_take_all(
                 hass,
                 profile_id=value if kind == "profile" else None,
                 source="nfc",
+                taken_by=who,
             )
             medication_ids = result["logged"]
             if not medication_ids:
@@ -490,13 +525,14 @@ async def _async_handle_notification_action(hass: HomeAssistant, event: Event) -
         return
     try:
         manager = get_runtime(hass)["manager"]
+        who = await async_context_user_name(hass, event.context)
         if action.startswith(ACTION_CONFIRMED_PREFIX):
             medication_id = action.removeprefix(ACTION_CONFIRMED_PREFIX)
             if medication_id in manager.medications:
-                await async_take(hass, medication_id, source="mobile_action")
+                await async_take(hass, medication_id, source="mobile_action", taken_by=who)
         elif action.startswith(ACTION_ALL_PREFIX):
             profile_id = action.removeprefix(ACTION_ALL_PREFIX)
-            await async_take_all(hass, profile_id=profile_id, source="mobile_action")
+            await async_take_all(hass, profile_id=profile_id, source="mobile_action", taken_by=who)
         elif action.startswith(ACTION_SNOOZE_PREFIX):
             medication_id = action.removeprefix(ACTION_SNOOZE_PREFIX)
             if medication_id in manager.medications:
