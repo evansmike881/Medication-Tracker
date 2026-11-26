@@ -205,16 +205,17 @@ def test_single_medication_actions(manager):
     assert actions[0]["action"] == "MEDICATION_CONFIRMED_med_a"
 
 
-def test_grouped_actions_include_all_taken_and_respect_android_limit(manager):
+def test_several_due_together_get_all_taken_and_snooze(manager):
     for ident in ("med_a", "med_b", "med_c"):
         add(manager, ident, ident.upper())
         for day in (24, 25):
             run(manager.async_log_dose(ident, at(8, 0, day), allow_duplicate=True))
     alerts = _pending(manager)
-    assert len(alerts) == 1
-    actions = alerts[0]["actions"]
-    assert len(actions) == 3
-    assert actions[0] == {"action": "MEDICATION_ALL_mike", "title": "All taken"}
+    assert len(alerts) == 1  # one notification, not three
+    assert alerts[0]["actions"] == [
+        {"action": "MEDICATION_ALL_mike", "title": "All taken"},
+        {"action": "MEDICATION_SNOOZEALL_mike", "title": "Snooze 10 min"},
+    ]
 
 
 # ---------------------------------------------------------------- schedules

@@ -18,7 +18,10 @@ from homeassistant.util import slugify
 from .const import (
     ACTION_ALL_PREFIX,
     ACTION_CONFIRMED_PREFIX,
+    ACTION_GROUP_PREFIX,
+    ACTION_GROUP_SNOOZE_PREFIX,
     ACTION_SKIP_PREFIX,
+    ACTION_SNOOZE_ALL_PREFIX,
     ACTION_SNOOZE_PREFIX,
     DEFAULT_MAX_REPEATS,
     DEFAULT_MISSED_AFTER_MINUTES,
@@ -41,7 +44,7 @@ from .const import (
     SETTING_QUIET_START,
 )
 from .medication_database import MedicationDatabase
-from .models import DoseLog, Medication
+from .models import DoseLog, Group, Medication
 from .store import MedicationTrackerStore
 
 # How long after a scheduled time a "take all" or tag scan still counts as that dose.
@@ -81,12 +84,14 @@ class MedicationTrackerManager:
         self.database = MedicationDatabase()
         self.medications: dict[str, Medication] = {}
         self.settings: dict[str, Any] = deepcopy(DEFAULT_SETTINGS)
+        self.groups: dict[str, Group] = {}
 
     async def async_initialize(self) -> None:
         """Load persisted state."""
         self.database = await MedicationDatabase.async_load(self.hass)
-        self.medications, self.settings = await self.store.async_load_all()
+        self.medications, self.settings, self.groups = await self.store.async_load_all()
         self._prune_old_logs()
+        self._sync_groups()
 
     def _prune_old_logs(self) -> None:
         """Drop dose logs older than the retention period so storage stays small."""
@@ -135,12 +140,25 @@ class MedicationTrackerManager:
         interval_days: int | None = None,
         anchor_date: str | None = None,
         escalate_after_minutes: int | None = None,
+        group_id: str | None = None,
     ) -> Medication:
         """Create or update a medication."""
         existing = self.medications.get(medication_id)
         if as_needed is None:
             as_needed = existing.as_needed if existing else False
-        normalized_schedules = self._normalize_schedules(schedules, allow_empty=bool(as_needed))
+        # None keeps the current group, "" removes it. As-needed medication is never grouped.
+        if group_id is None:
+            group_value = existing.group_id if existing else None
+        else:
+            group_value = group_id or None
+        if as_needed:
+            group_value = None
+        group = self.groups.get(group_value) if group_value else None
+        if group_value and group is None:
+            raise HomeAssistantError(f"Unknown group: {group_value}")
+        if group is not None and group.profile_id != profile_id:
+            raise HomeAssistantError(f"The group '{group.name}' belongs to {group.profile_name}.")
+        normalized_schedules = self._normalize_schedules(schedules or [], allow_empty=bool(as_needed) or group is not None)
         normalized_days = self._normalize_days(days_of_week)
         # For these, None keeps the stored value and "" / 0 clears it.
         if end_date is None:
@@ -217,6 +235,12 @@ class MedicationTrackerManager:
             anchor_date=anchor_value,
             escalate_after_minutes=escalate_value,
             last_escalation_notification=existing.last_escalation_notification if existing else None,
+            group_id=group_value,
+            sort_order=(
+                existing.sort_order
+                if existing and existing.group_id == group_value
+                else self._next_sort_order(profile_id, group_value)
+            ),
             created_at=existing.created_at if existing else dt_util.now().isoformat(),
             last_due_sent_at=existing.last_due_sent_at if existing else None,
             due_repeat_count=existing.due_repeat_count if existing else 0,
@@ -229,6 +253,8 @@ class MedicationTrackerManager:
             start_date=existing.start_date if existing else dt_util.now().date(),
             dose_logs=list(existing.dose_logs) if existing else [],
         )
+        if group is not None:
+            self._apply_group_to_medication(group, medication)
         self.medications[medication_id] = medication
         await self._async_save()
         return medication
@@ -329,6 +355,7 @@ class MedicationTrackerManager:
         *,
         profile_id: str | None = None,
         medication_ids: Iterable[str] | None = None,
+        group_id: str | None = None,
         source: str = "manual",
         confirmed_by: str | None = None,
         taken_by: str | None = None,
@@ -343,6 +370,8 @@ class MedicationTrackerManager:
         blocked: list[str] = []
         for medication in list(self.medications.values()):
             if profile_id and medication.profile_id != profile_id:
+                continue
+            if group_id and medication.group_id != group_id:
                 continue
             if wanted is not None and medication.medication_id not in wanted:
                 continue
@@ -422,6 +451,277 @@ class MedicationTrackerManager:
     # Settings and lookups
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Groups
+    # ------------------------------------------------------------------
+
+    def profile_id_for(self, profile_name: str) -> str:
+        """Reuse the id of an existing person with this name, or make a new one."""
+        for profile_id, name in self.list_profiles().items():
+            if name.casefold() == profile_name.strip().casefold():
+                return profile_id
+        for group in self.groups.values():
+            if group.profile_name.casefold() == profile_name.strip().casefold():
+                return group.profile_id
+        return slugify(profile_name) or "person"
+
+    def unique_medication_id(self, profile_name: str, name: str) -> str:
+        """Return an unused medication id for a person and medication name."""
+        base = slugify(f"{profile_name}_{name}") or "medication"
+        candidate, counter = base, 2
+        while candidate in self.medications:
+            candidate = f"{base}_{counter}"
+            counter += 1
+        return candidate
+
+    def _group_name(self, medication: Medication) -> str | None:
+        group = self.groups.get(medication.group_id) if medication.group_id else None
+        return group.name if group else None
+
+    def _item_group(self, medication: Medication) -> dict[str, Any]:
+        return {"group_id": medication.group_id, "group_name": self._group_name(medication)}
+
+    def _member_key(self, medication: Medication) -> tuple[int, str]:
+        return (medication.sort_order, medication.name.lower())
+
+    def group_members(self, group_id: str | None, profile_id: str | None = None) -> list[Medication]:
+        """Medications in a group (or the ungrouped ones for a person), in display order."""
+        members = [
+            medication
+            for medication in self.medications.values()
+            if medication.group_id == group_id and (profile_id is None or medication.profile_id == profile_id)
+        ]
+        return sorted(members, key=self._member_key)
+
+    def _next_sort_order(self, profile_id: str, group_id: str | None) -> int:
+        members = self.group_members(group_id, profile_id)
+        return (max(member.sort_order for member in members) + 1) if members else 0
+
+    def _apply_group_to_medication(self, group: Group, medication: Medication) -> None:
+        """Copy the group's schedule onto a member so all per-medication logic keeps working."""
+        medication.schedules = list(group.schedules)
+        medication.days_of_week = list(group.days_of_week) if group.days_of_week else None
+        medication.interval_days = group.interval_days
+        medication.anchor_date = group.anchor_date or medication.anchor_date
+        medication.notification_enabled = group.notification_enabled
+        if group.notify_service:
+            medication.notify_service = group.notify_service
+
+    def _sync_groups(self) -> None:
+        """Make every member match its group (also drops references to deleted groups)."""
+        for medication in self.medications.values():
+            if not medication.group_id:
+                continue
+            group = self.groups.get(medication.group_id)
+            if group is None:
+                medication.group_id = None
+            else:
+                self._apply_group_to_medication(group, medication)
+
+    async def async_save_group(
+        self,
+        *,
+        group_id: str | None = None,
+        profile_id: str,
+        profile_name: str,
+        name: str,
+        schedules: list[str],
+        days_of_week: list[int] | None = None,
+        interval_days: int = 1,
+        anchor_date: str | None = None,
+        notify_service: str | None = None,
+        nfc_tag_id: str | None = None,
+        notification_enabled: bool = True,
+        member_ids: list[str] | None = None,
+    ) -> Group:
+        """Create or update a group, optionally replacing its member list."""
+        name = (name or "").strip()
+        if not name:
+            raise HomeAssistantError("A group needs a name.")
+        interval = int(interval_days or 1)
+        if interval < 1 or interval > MAX_INTERVAL_DAYS:
+            raise HomeAssistantError(f"interval_days must be between 1 and {MAX_INTERVAL_DAYS}.")
+        existing = self.groups.get(group_id) if group_id else None
+        if group_id and existing is None:
+            raise HomeAssistantError(f"Unknown group: {group_id}")
+        if existing and existing.profile_id != profile_id:
+            raise HomeAssistantError("A group cannot be moved to another person.")
+        if not existing:
+            base = slugify(f"{profile_name}_{name}") or "group"
+            group_id, counter = base, 2
+            while group_id in self.groups:
+                group_id = f"{base}_{counter}"
+                counter += 1
+        group = Group(
+            group_id=group_id,
+            profile_id=profile_id,
+            profile_name=profile_name,
+            name=name,
+            schedules=self._normalize_schedules(schedules or []),
+            days_of_week=self._normalize_days(days_of_week),
+            interval_days=interval,
+            anchor_date=(self._parse_date(anchor_date, "anchor_date") if anchor_date else None)
+            or (existing.anchor_date if existing else None)
+            or dt_util.now().date(),
+            notify_service=notify_service or None,
+            nfc_tag_id=nfc_tag_id or None,
+            notification_enabled=bool(notification_enabled),
+            order=existing.order if existing else self._next_group_order(profile_id),
+        )
+        if member_ids is not None:
+            for medication_id in member_ids:
+                medication = self._get_medication(medication_id)
+                if medication.profile_id != profile_id:
+                    raise HomeAssistantError(f"{medication.name} belongs to {medication.profile_name}.")
+                if medication.as_needed:
+                    raise HomeAssistantError(f"{medication.name} is as-needed, so it can't be in a timed group.")
+        self.groups[group_id] = group
+        if member_ids is not None:
+            wanted = list(dict.fromkeys(member_ids))
+            for medication in self.medications.values():
+                if medication.group_id == group_id and medication.medication_id not in wanted:
+                    medication.group_id = None
+            for position, medication_id in enumerate(wanted):
+                medication = self.medications[medication_id]
+                medication.group_id = group_id
+                medication.sort_order = position
+        for medication in self.group_members(group_id):
+            self._apply_group_to_medication(group, medication)
+        await self._async_save()
+        return group
+
+    def _next_group_order(self, profile_id: str) -> int:
+        orders = [group.order for group in self.groups.values() if group.profile_id == profile_id]
+        return (max(orders) + 1) if orders else 0
+
+    async def async_delete_group(self, group_id: str) -> None:
+        """Delete a group. Its medications stay (ungrouped, keeping their schedule)."""
+        if group_id not in self.groups:
+            raise HomeAssistantError(f"Unknown group: {group_id}")
+        profile_id = self.groups[group_id].profile_id
+        self.groups.pop(group_id)
+        for position, medication in enumerate(self.group_members(group_id)):
+            medication.group_id = None
+            medication.sort_order = self._next_sort_order(profile_id, None) + position
+        await self._async_save()
+
+    async def async_move_medication(
+        self,
+        medication_id: str,
+        group_id: str | None,
+        index: int | None = None,
+    ) -> Medication:
+        """Move a medication into a group (or out of all groups) at a position."""
+        medication = self._get_medication(medication_id)
+        group = self.groups.get(group_id) if group_id else None
+        if group_id and group is None:
+            raise HomeAssistantError(f"Unknown group: {group_id}")
+        if group is not None:
+            if group.profile_id != medication.profile_id:
+                raise HomeAssistantError(f"The group '{group.name}' belongs to {group.profile_name}.")
+            if medication.as_needed:
+                raise HomeAssistantError(f"{medication.name} is as-needed, so it can't be in a timed group.")
+        source_group = medication.group_id
+        medication.group_id = group_id or None
+        if group is not None:
+            self._apply_group_to_medication(group, medication)
+        siblings = [
+            member
+            for member in self.group_members(group_id or None, medication.profile_id)
+            if member.medication_id != medication_id
+        ]
+        position = len(siblings) if index is None else max(0, min(int(index), len(siblings)))
+        siblings.insert(position, medication)
+        for order, member in enumerate(siblings):
+            member.sort_order = order
+        if source_group != (group_id or None):
+            for order, member in enumerate(self.group_members(source_group, medication.profile_id)):
+                member.sort_order = order
+        await self._async_save()
+        return medication
+
+    async def async_reorder_groups(self, profile_id: str, group_ids: list[str]) -> None:
+        """Set the display order of a person's groups."""
+        for group_id in group_ids:
+            group = self.groups.get(group_id)
+            if group is None or group.profile_id != profile_id:
+                raise HomeAssistantError(f"Unknown group for this person: {group_id}")
+        rest = sorted(
+            (g for g in self.groups.values() if g.profile_id == profile_id and g.group_id not in group_ids),
+            key=lambda g: g.order,
+        )
+        for position, group_id in enumerate([*group_ids, *[g.group_id for g in rest]]):
+            self.groups[group_id].order = position
+        await self._async_save()
+
+    async def async_quick_add(
+        self,
+        *,
+        profile_name: str,
+        items: list[dict[str, Any]],
+        group_id: str | None = None,
+        new_group: dict[str, Any] | None = None,
+        schedules: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Add many medications at once, optionally into a (new) group."""
+        profile_name = profile_name.strip()
+        if not profile_name:
+            raise HomeAssistantError("Who are these medications for?")
+        names = [item for item in items if str(item.get("name", "")).strip()]
+        if not names:
+            raise HomeAssistantError("Add at least one medication.")
+        profile_id = self.profile_id_for(profile_name)
+        if new_group:
+            group = await self.async_save_group(
+                profile_id=profile_id,
+                profile_name=profile_name,
+                name=new_group.get("name", ""),
+                schedules=new_group.get("schedules") or schedules or [],
+                days_of_week=new_group.get("days_of_week"),
+                notify_service=new_group.get("notify_service"),
+            )
+            group_id = group.group_id
+        elif not group_id and not schedules:
+            raise HomeAssistantError("Choose a group or at least one time.")
+        created: list[str] = []
+        for item in names:
+            medication_id = self.unique_medication_id(profile_name, str(item["name"]))
+            await self.async_add_medication(
+                profile_id=profile_id,
+                profile_name=profile_name,
+                medication_id=medication_id,
+                medication_name=str(item["name"]).strip(),
+                dosage=str(item.get("dosage") or "1 dose").strip(),
+                schedules=[] if group_id else list(schedules or []),
+                group_id=group_id or "",
+            )
+            created.append(medication_id)
+        return {"created": created, "group_id": group_id}
+
+    def get_groups_view(self) -> list[dict[str, Any]]:
+        """Return groups with their ordered members, for the panel."""
+        rows = []
+        for group in sorted(self.groups.values(), key=lambda g: (g.profile_name.lower(), g.order, g.name.lower())):
+            rows.append(
+                {
+                    **group.as_dict(),
+                    "anchor_date": group.anchor_date.isoformat() if group.anchor_date else None,
+                    "member_ids": [m.medication_id for m in self.group_members(group.group_id)],
+                }
+            )
+        return rows
+
+    def outstanding_ids(self, profile_id: str | None = None, group_id: str | None = None) -> list[str]:
+        """Medications that currently have a dose waiting, optionally filtered."""
+        now = dt_util.now()
+        return [
+            medication.medication_id
+            for medication in self.medications.values()
+            if (not profile_id or medication.profile_id == profile_id)
+            and (not group_id or medication.group_id == group_id)
+            and self._outstanding_occurrence(medication, now) is not None
+        ]
+
     async def async_update_settings(self, updates: dict[str, Any]) -> dict[str, Any]:
         """Validate and store integration-wide settings."""
         for key, value in updates.items():
@@ -489,6 +789,9 @@ class MedicationTrackerManager:
         medication = self.get_by_tag(tag_id)
         if medication is not None:
             return "medication", medication
+        for group in self.groups.values():
+            if group.nfc_tag_id and group.nfc_tag_id == tag_id:
+                return "group", group
         profile_id = self.settings.get(SETTING_PROFILE_TAGS, {}).get(tag_id)
         if profile_id:
             return "profile", profile_id
@@ -550,6 +853,9 @@ class MedicationTrackerManager:
             "profile_id": medication.profile_id,
             "profile_name": medication.profile_name,
             "belongs_to": medication.profile_name,
+            "group_id": medication.group_id,
+            "group_name": self._group_name(medication),
+            "sort_order": medication.sort_order,
             "medication_name": medication.name,
             "dosage": medication.dosage,
             "notes": medication.notes,
@@ -699,13 +1005,25 @@ class MedicationTrackerManager:
                         "profile_id": medication.profile_id,
                         "profile_name": medication.profile_name,
                         "dosage": medication.dosage,
+                        "group_id": medication.group_id,
+                        "group_name": self._group_name(medication),
+                        "group_order": self.groups[medication.group_id].order if medication.group_id in self.groups else 999,
+                        "sort_order": medication.sort_order,
                         "time": occurrence.strftime("%H:%M"),
                         "scheduled_at": occurrence.isoformat(),
                         "status": self._occurrence_status(medication, occurrence, now, state.matched),
                         "can_take": outstanding is not None and outstanding == occurrence,
                     }
                 )
-        doses.sort(key=lambda item: (item["scheduled_at"], item["profile_name"].lower(), item["medication_name"].lower()))
+        doses.sort(
+            key=lambda item: (
+                item["scheduled_at"],
+                item["profile_name"].lower(),
+                item["group_order"],
+                item["sort_order"],
+                item["medication_name"].lower(),
+            )
+        )
         return doses
 
     def get_as_needed(self) -> list[dict[str, Any]]:
@@ -808,6 +1126,7 @@ class MedicationTrackerManager:
                             "scheduled_time": due_schedule,
                             "display_time": self._effective_due_start(medication, due_schedule),
                             "repeat": is_repeat,
+                            **self._item_group(medication),
                         }
                     )
 
@@ -824,6 +1143,7 @@ class MedicationTrackerManager:
                         "dosage": medication.dosage,
                         "notify_service": notify_service,
                         "scheduled_time": missed_schedule,
+                        **self._item_group(medication),
                     }
                 )
 
@@ -847,6 +1167,7 @@ class MedicationTrackerManager:
                                 "dosage": medication.dosage,
                                 "notify_service": escalation_service,
                                 "scheduled_time": overdue,
+                                **self._item_group(medication),
                             }
                         )
 
@@ -957,7 +1278,7 @@ class MedicationTrackerManager:
 
     async def _async_save(self) -> None:
         """Persist medication state."""
-        await self.store.async_save(self.medications, self.settings)
+        await self.store.async_save(self.medications, self.settings, self.groups)
 
     def _get_medication(self, medication_id: str) -> Medication:
         """Fetch a medication or raise a service-friendly error."""
@@ -1288,8 +1609,9 @@ class MedicationTrackerManager:
     def _build_actions(self, kind: str, items: list[dict[str, Any]]) -> list[dict[str, str]]:
         """Build mobile notification actions for one or more medications.
 
-        Android shows up to three actions, so a group gets "All taken" plus the first two
-        individual medications. Everything stays available from the panel.
+        Android shows up to three actions. One medication gets Taken / Snooze / Skip. A set of
+        medications gets All taken (for the group, or for the person) and Snooze; tapping the
+        notification opens the panel, where each item can be ticked off individually.
         """
         if len(items) == 1:
             medication_id = items[0]["medication_id"]
@@ -1304,7 +1626,19 @@ class MedicationTrackerManager:
             actions.append({"action": f"{ACTION_SKIP_PREFIX}{medication_id}", "title": "Skip"})
             return actions
 
-        actions = [{"action": f"{ACTION_ALL_PREFIX}{items[0]['profile_id']}", "title": "All taken"}]
+        group_ids = {item.get("group_id") for item in items}
+        single_group = len(group_ids) == 1 and None not in group_ids
+        if single_group:
+            group_id = next(iter(group_ids))
+            actions = [{"action": f"{ACTION_GROUP_PREFIX}{group_id}", "title": "All taken"}]
+            snooze = {"action": f"{ACTION_GROUP_SNOOZE_PREFIX}{group_id}", "title": "Snooze 10 min"}
+        else:
+            profile_id = items[0]["profile_id"]
+            actions = [{"action": f"{ACTION_ALL_PREFIX}{profile_id}", "title": "All taken"}]
+            snooze = {"action": f"{ACTION_SNOOZE_ALL_PREFIX}{profile_id}", "title": "Snooze 10 min"}
+        if kind == "due":
+            actions.append(snooze)
+            return actions
         for item in items[:2]:
             actions.append(
                 {
@@ -1326,20 +1660,38 @@ class MedicationTrackerManager:
         display_time = first.get("display_time", scheduled_time)
         is_repeat = all(item.get("repeat") for item in sorted_due_medications)
         prefix = "Reminder: " if is_repeat else ""
+        when = display_time.strftime("%H:%M")
+        group_ids = {item.get("group_id") for item in sorted_due_medications}
+        single_group = len(group_ids) == 1 and None not in group_ids
+        title = "Medication Tracker"
 
         if len(sorted_due_medications) == 1:
             message = (
                 f"{prefix}{first['profile_name']} is due to take {first['medication_name']} "
-                f"({first['dosage']}) at {display_time.strftime('%H:%M')}."
+                f"({first['dosage']}) at {when}."
+            )
+        elif single_group:
+            title = first["group_name"] or title
+            lines = "\n".join(f"- {item['medication_name']} ({item['dosage']})" for item in sorted_due_medications)
+            message = (
+                f"{prefix}{first['profile_name']}: {len(sorted_due_medications)} to take at {when}:\n{lines}"
             )
         else:
-            medication_lines = "\n".join(
-                f"- {item['medication_name']} ({item['dosage']})"
-                for item in sorted_due_medications
-            )
+            sections: dict[str | None, list[dict[str, Any]]] = {}
+            for item in sorted_due_medications:
+                sections.setdefault(item.get("group_name"), []).append(item)
+            if len(sections) == 1:
+                lines = "\n".join(f"- {i['medication_name']} ({i['dosage']})" for i in sorted_due_medications)
+            else:
+                blocks = []
+                for group_name in sorted(sections, key=lambda g: (g is None, (g or "").lower())):
+                    heading = f"{group_name}:" if group_name else "Other:"
+                    rows = "\n".join(f"- {i['medication_name']} ({i['dosage']})" for i in sections[group_name])
+                    blocks.append(f"{heading}\n{rows}")
+                lines = "\n".join(blocks)
             message = (
                 f"{prefix}{first['profile_name']} is due to take {len(sorted_due_medications)} medications "
-                f"at {display_time.strftime('%H:%M')}:\n{medication_lines}"
+                f"at {when}:\n{lines}"
             )
 
         return {
@@ -1348,6 +1700,7 @@ class MedicationTrackerManager:
             "medication_ids": medication_ids,
             "notify_service": first["notify_service"],
             "scheduled_time": scheduled_time,
+            "title": title,
             "message": message,
             "repeat": is_repeat,
             "actions": self._build_actions("due", sorted_due_medications),

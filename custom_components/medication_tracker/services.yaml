@@ -155,6 +155,11 @@ add_medication:
       description: The first day of an every-N-days schedule.
       selector:
         date:
+    group_id:
+      required: false
+      description: Put this medication in a group; it then uses the group's times and shares its notification.
+      selector:
+        text:
     escalate_after_minutes:
       required: false
       description: Tell the caregiver if the dose is still not taken this long after it was due (0 = off).
@@ -242,9 +247,13 @@ skip_medication:
 
 log_all_due:
   name: Mark all due as taken
-  description: Log a dose for every medication that is currently due or overdue. Optionally limit it to one profile or specific medications.
+  description: Log a dose for every medication that is currently due or overdue. Optionally limit it to one profile, one group or specific medications.
   fields:
     profile_id:
+      required: false
+      selector:
+        text:
+    group_id:
       required: false
       selector:
         text:
@@ -347,3 +356,83 @@ undo_last_dose:
       required: true
       selector:
         text:
+
+add_group:
+  name: Add or update group
+  description: Create a group of medications taken together. They share one schedule and one notification but are still tracked individually.
+  fields:
+    profile_name:
+      required: true
+      selector:
+        text:
+    name:
+      required: true
+      selector:
+        text:
+    schedules:
+      required: true
+      example: ["08:00"]
+      selector:
+        object:
+    group_id:
+      required: false
+      description: Give an existing group's id to update it.
+      selector:
+        text:
+    medication_ids:
+      required: false
+      description: Medications to put in the group (replaces the current members).
+      selector:
+        object:
+    days_of_week:
+      required: false
+      selector:
+        object:
+    interval_days:
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 30
+          mode: box
+    notify_service:
+      required: false
+      selector:
+        text:
+    nfc_tag_id:
+      required: false
+      description: Scanning this tag marks everything due in the group as taken.
+      selector:
+        text:
+    notification_enabled:
+      required: false
+      selector:
+        boolean:
+
+remove_group:
+  name: Remove group
+  description: Delete a group. Its medications are kept and keep their current schedule.
+  fields:
+    group_id:
+      required: true
+      selector:
+        text:
+
+set_medication_group:
+  name: Move medication to group
+  description: Put a medication in a group (or out of all groups when group_id is empty).
+  fields:
+    medication_id:
+      required: true
+      selector:
+        text:
+    group_id:
+      required: false
+      selector:
+        text:
+    position:
+      required: false
+      selector:
+        number:
+          min: 0
+          mode: box

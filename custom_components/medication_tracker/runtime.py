@@ -89,6 +89,7 @@ async def async_take_all(
     *,
     profile_id: str | None = None,
     medication_ids: list[str] | None = None,
+    group_id: str | None = None,
     source: str = "manual",
     confirmed_by: str | None = None,
     taken_by: str | None = None,
@@ -98,6 +99,7 @@ async def async_take_all(
     result = await runtime["manager"].async_log_outstanding(
         profile_id=profile_id,
         medication_ids=medication_ids,
+        group_id=group_id,
         source=source,
         confirmed_by=confirmed_by,
         taken_by=taken_by,
@@ -133,6 +135,24 @@ async def async_snooze(hass: HomeAssistant, medication_id: str, minutes: int) ->
     await async_refresh(hass)
 
 
+async def async_snooze_outstanding(
+    hass: HomeAssistant,
+    minutes: int,
+    *,
+    profile_id: str | None = None,
+    group_id: str | None = None,
+) -> list[str]:
+    """Snooze everything that is currently due for a person or group."""
+    runtime = get_runtime(hass)
+    ids = runtime["manager"].outstanding_ids(profile_id=profile_id, group_id=group_id)
+    for medication_id in ids:
+        await runtime["manager"].async_snooze_medication(medication_id, minutes)
+    if ids:
+        await runtime["alert_engine"].async_dismiss_for_medications(ids)
+    await async_refresh(hass)
+    return ids
+
+
 async def async_undo_last(hass: HomeAssistant, medication_id: str) -> None:
     """Remove the most recent dose and let reminders resume if it is still due."""
     runtime = get_runtime(hass)
@@ -147,6 +167,7 @@ __all__ = [
     "async_refresh",
     "async_skip",
     "async_snooze",
+    "async_snooze_outstanding",
     "async_take",
     "async_take_all",
     "get_runtime",

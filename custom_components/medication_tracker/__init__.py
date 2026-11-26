@@ -24,7 +24,10 @@ from .alerts import MedicationAlertEngine
 from .const import (
     ACTION_ALL_PREFIX,
     ACTION_CONFIRMED_PREFIX,
+    ACTION_GROUP_PREFIX,
+    ACTION_GROUP_SNOOZE_PREFIX,
     ACTION_SKIP_PREFIX,
+    ACTION_SNOOZE_ALL_PREFIX,
     ACTION_SNOOZE_PREFIX,
     ASSET_BASE_URL,
     ATTR_CAREGIVER_NAME,
@@ -36,6 +39,7 @@ from .const import (
     ATTR_DOSAGE,
     ATTR_DUPLICATE_GUARD_MINUTES,
     ATTR_FORM,
+    ATTR_GROUP_ID,
     ATTR_INSTRUCTIONS,
     ATTR_MAX_REPEATS,
     ATTR_MEDICATION_ID,
@@ -87,6 +91,7 @@ from .runtime import (
     async_skip,
     async_context_user_name,
     async_snooze,
+    async_snooze_outstanding,
     async_take,
     async_take_all,
     async_undo_last,
@@ -113,6 +118,9 @@ SERVICE_SKIP_MEDICATION = "skip_medication"
 SERVICE_SNOOZE_MEDICATION = "snooze_medication"
 SERVICE_UPDATE_SETTINGS = "update_settings"
 SERVICE_UNDO_LAST_DOSE = "undo_last_dose"
+SERVICE_ADD_GROUP = "add_group"
+SERVICE_REMOVE_GROUP = "remove_group"
+SERVICE_SET_MEDICATION_GROUP = "set_medication_group"
 SERVICE_NAMES = (
     SERVICE_ADD_MEDICATION,
     SERVICE_LOG_DOSE,
@@ -125,6 +133,9 @@ SERVICE_NAMES = (
     SERVICE_SNOOZE_MEDICATION,
     SERVICE_UPDATE_SETTINGS,
     SERVICE_UNDO_LAST_DOSE,
+    SERVICE_ADD_GROUP,
+    SERVICE_REMOVE_GROUP,
+    SERVICE_SET_MEDICATION_GROUP,
 )
 
 MEDICATION_ENTITY_SUFFIXES = tuple(
@@ -174,6 +185,32 @@ ADD_MEDICATION_SCHEMA = vol.Schema(
         vol.Optional("interval_days"): vol.All(vol.Coerce(int), vol.Range(min=1, max=30)),
         vol.Optional("anchor_date"): cv.string,
         vol.Optional("escalate_after_minutes"): vol.All(vol.Coerce(int), vol.Range(min=0, max=1440)),
+        vol.Optional(ATTR_GROUP_ID): vol.Any(None, cv.string),
+    }
+)
+
+ADD_GROUP_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_PROFILE_NAME): cv.string,
+        vol.Required("name"): cv.string,
+        vol.Required(ATTR_SCHEDULES): vol.All([cv.string], vol.Length(min=1)),
+        vol.Optional(ATTR_GROUP_ID): cv.string,
+        vol.Optional(ATTR_DAYS_OF_WEEK): vol.All(
+            cv.ensure_list, [vol.All(vol.Coerce(int), vol.Range(min=0, max=6))]
+        ),
+        vol.Optional("interval_days", default=1): vol.All(vol.Coerce(int), vol.Range(min=1, max=30)),
+        vol.Optional(ATTR_NOTIFY_SERVICE): cv.string,
+        vol.Optional(ATTR_NFC_TAG_ID): cv.string,
+        vol.Optional(ATTR_NOTIFICATION_ENABLED, default=True): cv.boolean,
+        vol.Optional("medication_ids"): vol.All(cv.ensure_list, [cv.string]),
+    }
+)
+REMOVE_GROUP_SCHEMA = vol.Schema({vol.Required(ATTR_GROUP_ID): cv.string})
+SET_MEDICATION_GROUP_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_MEDICATION_ID): cv.string,
+        vol.Optional(ATTR_GROUP_ID): vol.Any(None, cv.string),
+        vol.Optional("position"): vol.All(vol.Coerce(int), vol.Range(min=0)),
     }
 )
 
@@ -190,6 +227,7 @@ LOG_DOSE_SCHEMA = vol.Schema(
 LOG_ALL_DUE_SCHEMA = vol.Schema(
     {
         vol.Optional(ATTR_PROFILE_ID): cv.string,
+        vol.Optional(ATTR_GROUP_ID): cv.string,
         vol.Optional(ATTR_MEDICATION_IDS): vol.All(cv.ensure_list, [cv.string]),
         vol.Optional(ATTR_SOURCE, default="manual"): cv.string,
         vol.Optional(ATTR_CONFIRMED_BY): cv.string,
@@ -324,11 +362,41 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         await async_take_all(
             hass,
             profile_id=call.data.get(ATTR_PROFILE_ID),
+            group_id=call.data.get(ATTR_GROUP_ID),
             medication_ids=call.data.get(ATTR_MEDICATION_IDS),
             source=call.data.get(ATTR_SOURCE, "manual"),
             confirmed_by=call.data.get(ATTR_CONFIRMED_BY),
             taken_by=await async_context_user_name(hass, call.context),
         )
+
+    async def handle_add_group(call: ServiceCall) -> None:
+        manager = get_runtime(hass)["manager"]
+        data = dict(call.data)
+        profile_name = data.pop(ATTR_PROFILE_NAME)
+        await manager.async_save_group(
+            group_id=data.pop(ATTR_GROUP_ID, None),
+            profile_id=manager.profile_id_for(profile_name),
+            profile_name=profile_name,
+            name=data.pop("name"),
+            schedules=data.pop(ATTR_SCHEDULES),
+            days_of_week=data.pop(ATTR_DAYS_OF_WEEK, None),
+            interval_days=data.pop("interval_days", 1),
+            notify_service=data.pop(ATTR_NOTIFY_SERVICE, None),
+            nfc_tag_id=data.pop(ATTR_NFC_TAG_ID, None),
+            notification_enabled=data.pop(ATTR_NOTIFICATION_ENABLED, True),
+            member_ids=data.pop("medication_ids", None),
+        )
+        await async_refresh(hass)
+
+    async def handle_remove_group(call: ServiceCall) -> None:
+        await get_runtime(hass)["manager"].async_delete_group(call.data[ATTR_GROUP_ID])
+        await async_refresh(hass)
+
+    async def handle_set_medication_group(call: ServiceCall) -> None:
+        await get_runtime(hass)["manager"].async_move_medication(
+            call.data[ATTR_MEDICATION_ID], call.data.get(ATTR_GROUP_ID), call.data.get("position")
+        )
+        await async_refresh(hass)
 
     async def handle_undo_last_dose(call: ServiceCall) -> None:
         await async_undo_last(hass, call.data[ATTR_MEDICATION_ID])
@@ -385,6 +453,9 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         (SERVICE_SKIP_MEDICATION, handle_skip_medication, SKIP_MEDICATION_SCHEMA),
         (SERVICE_UPDATE_SETTINGS, handle_update_settings, UPDATE_SETTINGS_SCHEMA),
         (SERVICE_UNDO_LAST_DOSE, handle_undo_last_dose, UNDO_LAST_DOSE_SCHEMA),
+        (SERVICE_ADD_GROUP, handle_add_group, ADD_GROUP_SCHEMA),
+        (SERVICE_REMOVE_GROUP, handle_remove_group, REMOVE_GROUP_SCHEMA),
+        (SERVICE_SET_MEDICATION_GROUP, handle_set_medication_group, SET_MEDICATION_GROUP_SCHEMA),
     ):
         hass.services.async_register(DOMAIN, name, handler, schema=schema)
 
@@ -488,6 +559,7 @@ async def _async_handle_tag_scanned(hass: HomeAssistant, event: Event) -> None:
             result = await async_take_all(
                 hass,
                 profile_id=value if kind == "profile" else None,
+                group_id=value.group_id if kind == "group" else None,
                 source="nfc",
                 taken_by=who,
             )
@@ -530,6 +602,16 @@ async def _async_handle_notification_action(hass: HomeAssistant, event: Event) -
             medication_id = action.removeprefix(ACTION_CONFIRMED_PREFIX)
             if medication_id in manager.medications:
                 await async_take(hass, medication_id, source="mobile_action", taken_by=who)
+        elif action.startswith(ACTION_GROUP_PREFIX):
+            group_id = action.removeprefix(ACTION_GROUP_PREFIX)
+            if group_id in manager.groups:
+                await async_take_all(hass, group_id=group_id, source="mobile_action", taken_by=who)
+        elif action.startswith(ACTION_GROUP_SNOOZE_PREFIX):
+            group_id = action.removeprefix(ACTION_GROUP_SNOOZE_PREFIX)
+            if group_id in manager.groups:
+                await async_snooze_outstanding(hass, 10, group_id=group_id)
+        elif action.startswith(ACTION_SNOOZE_ALL_PREFIX):
+            await async_snooze_outstanding(hass, 10, profile_id=action.removeprefix(ACTION_SNOOZE_ALL_PREFIX))
         elif action.startswith(ACTION_ALL_PREFIX):
             profile_id = action.removeprefix(ACTION_ALL_PREFIX)
             await async_take_all(hass, profile_id=profile_id, source="mobile_action", taken_by=who)

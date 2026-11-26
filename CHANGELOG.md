@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+- **Groups.** Put several medications, vitamins or minerals in a group to get one notification, one spoken announcement and one Take all button, while each item is still tracked individually (history, stock, adherence, missed doses). A group has its own times, days, reminder phone, reminders switch and optional NFC tag.
+- **Drag and drop** in the panel: move medications into and out of groups, reorder them, and reorder groups. Works with touch, mouse and the keyboard (arrow keys on a focused handle), and a Group dropdown on the medication form does the same thing without dragging.
+- **Quick add several**: type a list (`Vitamin D, 1000 IU` per line) straight into a new or existing group.
+- **Today as checklists**: group blocks with "2 of 5 taken", a progress bar and Take all; the dashboard card does the same.
+- **Group notification actions**: All taken / Snooze 10 min for a group; a notification with several mixed items gets All taken and Snooze for the lot. Tapping a notification opens the panel so you can tick items individually.
+- Services `add_group`, `remove_group`, `set_medication_group`; `group_id` on `add_medication` and `log_all_due`. Assist can log a group by name.
+
+### Changed
+- Several things due together at once now give one notification, titled by group when they belong to one.
+
+### Upgrading
+Nothing to migrate: 0.4.x data loads unchanged and nothing is grouped until you create a group. Restart Home Assistant and hard refresh the browser (Ctrl+Shift+R).
+
 ## 0.4.0
 
 ### Added

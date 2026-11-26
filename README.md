@@ -91,6 +91,18 @@ That means less second-guessing, fewer missed steps, and a much better shared vi
 - Summary sensors and a medication registry for dashboards
 - A custom Lovelace card for a cleaner registry view
 
+## Groups: one reminder for several medications
+
+If you take a handful of prescriptions plus a pile of vitamins and minerals, you don't want a separate alert for each. Put them in a **group**:
+
+- One notification (titled with the group name), one spoken announcement, and one **Take all** button for the whole group.
+- Every medication inside is still tracked on its own: its own history, stock count, adherence and missed doses. Tick them one by one in the panel if you prefer.
+- A group owns the times, days and reminder phone; members follow it. Change the group's time once and everything in it moves.
+- Different people have separate groups, and as-needed medication is never grouped.
+- A group can have its own NFC tag that marks everything due in it as taken, and you can say "log medication morning vitamins as taken" to Assist.
+
+Quickest way to set up: **Medications -> Quick add several**, pick the person, choose "A new group", give it a name and a time, and type one medication per line (`Vitamin D, 1000 IU`). Then drag things around.
+
 ## Installation
 
 1. Add this repository as a custom repository in HACS / the Home Assistant Marketplace (type: Integration).
@@ -103,8 +115,8 @@ That means less second-guessing, fewer missed steps, and a much better shared vi
 
 Medication Tracker adds a **Medications** page to the Home Assistant sidebar. It is the easiest way to use the integration day to day:
 
-- **Today** - everything scheduled today with its status. Press **Take all due** to mark everything that is due as taken, **All taken for <person>** for one person, or Taken / Snooze / Skip on a single medication.
-- **Medications** - add, edit, delete and top up stock. Pick times with time pickers, choose which days of the week, set how many doses you have left, and bind an NFC tag (press **Scan** and tap the tag with your phone).
+- **Today** - everything scheduled today with its status. Groups show as a checklist with a progress bar and a **Take all** button for the group; press **Take all due** to mark everything that is due as taken, **All taken for <person>** for one person, or Taken / Skip on a single medication.
+- **Medications** - organised by person and group. **Drag the ⠿ handle** to move a medication into a group, out of one, or to reorder; drag a group's handle to reorder groups (touch, mouse, or focus a handle and use the up and down arrow keys). Add, edit, delete and top up stock. Pick times with time pickers, choose which days of the week, set how many doses you have left, and bind an NFC tag (press **Scan** and tap the tag with your phone).
 - **History** - recent doses, with the option to delete one that was logged by mistake.
 - **Settings** - default phone for reminders, a backup phone, and NFC tags that mark everything (or one person's medications) as taken.
 
@@ -268,6 +280,7 @@ Reliable Assist phrases:
 Write a tag with the Home Assistant Companion app (`Settings -> Tags -> Create tag -> Write to NFC`), then:
 
 - **One medication** - set the tag on the medication's edit page in the panel (press **Scan**, tap the tag). Scanning logs that dose.
+- **A group** - set the tag on the group's edit page. Scanning marks everything currently due in that group as taken.
 - **Everything due** - add the tag under `Settings -> NFC tags` in the panel. Scanning marks everything currently due as taken.
 - **One person** - set a tag against a person in the same place. Scanning marks only that person's due medications as taken.
 
@@ -279,7 +292,8 @@ The UI is the preferred way to manage medications, but services are still availa
 
 - `medication_tracker.add_medication` (now also `days_of_week`, `repeat_every_minutes`, `max_repeats`)
 - `medication_tracker.log_dose`
-- `medication_tracker.log_all_due` (optionally `profile_id` or `medication_ids`)
+- `medication_tracker.log_all_due` (optionally `profile_id`, `group_id` or `medication_ids`)
+- `medication_tracker.add_group`, `medication_tracker.remove_group`, `medication_tracker.set_medication_group`
 - `medication_tracker.delete_dose`
 - `medication_tracker.reset_history`
 - `medication_tracker.update_settings`

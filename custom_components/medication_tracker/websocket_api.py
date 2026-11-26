@@ -11,7 +11,6 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
-from homeassistant.util import slugify
 
 from .const import (
     DEFAULT_MAX_REPEATS,
@@ -75,6 +74,7 @@ def _build_state(hass: HomeAssistant) -> dict[str, Any]:
         "profiles": manager.list_profiles(),
         "today": manager.get_today_doses(),
         "as_needed": manager.get_as_needed(),
+        "groups": manager.get_groups_view(),
         "recent_logs": manager.get_recent_logs(60),
         "settings": manager.settings,
         "summary": manager.get_summary(),
@@ -158,14 +158,24 @@ async def ws_get_history(hass, connection, msg):
 
 
 @websocket_api.websocket_command(
-    {vol.Required("type"): PREFIX + "take_all", vol.Optional("profile_id"): vol.Any(None, str)}
+    {
+        vol.Required("type"): PREFIX + "take_all",
+        vol.Optional("profile_id"): vol.Any(None, str),
+        vol.Optional("group_id"): vol.Any(None, str),
+        vol.Optional("medication_ids"): [str],
+    }
 )
 @websocket_api.async_response
 @_handler
 async def ws_take_all(hass, connection, msg):
     """Mark everything that is due as taken."""
     return await async_take_all(
-        hass, profile_id=msg.get("profile_id"), source="panel", taken_by=_user_name(connection)
+        hass,
+        profile_id=msg.get("profile_id"),
+        group_id=msg.get("group_id"),
+        medication_ids=msg.get("medication_ids"),
+        source="panel",
+        taken_by=_user_name(connection),
     )
 
 
@@ -245,6 +255,7 @@ async def ws_refill(hass, connection, msg):
         vol.Optional("interval_days", default=1): vol.All(int, vol.Range(min=1, max=30)),
         vol.Optional("anchor_date"): vol.Any(None, str),
         vol.Optional("escalate_after_minutes", default=0): vol.All(int, vol.Range(min=0, max=1440)),
+        vol.Optional("group_id"): vol.Any(None, str),
     }
 )
 @websocket_api.require_admin
@@ -259,24 +270,14 @@ async def ws_save_medication(hass, connection, msg):
     profile_name = data.pop("profile_name").strip()
     profile_id = data.pop("profile_id", None)
     if not profile_id:
-        # Reuse the profile id when this person already exists.
-        for pid, name in manager.list_profiles().items():
-            if name.casefold() == profile_name.casefold():
-                profile_id = pid
-                break
-        else:
-            profile_id = slugify(profile_name)
+        profile_id = manager.profile_id_for(profile_name)
 
     if existing_id:
         if existing_id not in manager.medications:
             raise HomeAssistantError(f"Unknown medication: {existing_id}")
         medication_id = existing_id
     else:
-        base = slugify(f"{profile_name}_{data['medication_name']}")
-        medication_id, counter = base, 2
-        while medication_id in manager.medications:
-            medication_id = f"{base}_{counter}"
-            counter += 1
+        medication_id = manager.unique_medication_id(profile_name, data["medication_name"])
 
     # Optional nullable fields: an explicit null clears them.
     for key in ("quantity", "refill_at"):
@@ -284,6 +285,7 @@ async def ws_save_medication(hass, connection, msg):
     # The panel always sends the whole form, so an empty value means "clear it".
     data["end_date"] = data.get("end_date") or ""
     data["max_doses_per_day"] = data.get("max_doses_per_day") or 0
+    data["group_id"] = data.get("group_id") or ""  # the panel sends the whole form: empty means no group
     if not data.get("anchor_date"):
         data.pop("anchor_date", None)
     for key in ("caregiver_name", "caregiver_notify_service"):
@@ -298,6 +300,132 @@ async def ws_save_medication(hass, connection, msg):
     )
     await async_refresh(hass)
     return {"medication_id": medication.medication_id}
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): PREFIX + "save_group",
+        vol.Optional("group_id"): vol.Any(None, str),
+        vol.Required("profile_name"): vol.All(str, vol.Length(min=1)),
+        vol.Required("name"): vol.All(str, vol.Length(min=1)),
+        vol.Required("schedules"): vol.All([str], vol.Length(min=1)),
+        vol.Optional("days_of_week"): vol.Any(None, [vol.All(int, vol.Range(min=0, max=6))]),
+        vol.Optional("interval_days", default=1): vol.All(int, vol.Range(min=1, max=30)),
+        vol.Optional("anchor_date"): vol.Any(None, str),
+        vol.Optional("notify_service"): vol.Any(None, str),
+        vol.Optional("nfc_tag_id"): vol.Any(None, str),
+        vol.Optional("notification_enabled", default=True): bool,
+        vol.Optional("member_ids"): vol.Any(None, [str]),
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+@_handler
+async def ws_save_group(hass, connection, msg):
+    """Create or edit a group."""
+    manager = get_runtime(hass)["manager"]
+    group = await manager.async_save_group(
+        group_id=msg.get("group_id") or None,
+        profile_id=manager.profile_id_for(msg["profile_name"]),
+        profile_name=msg["profile_name"].strip(),
+        name=msg["name"],
+        schedules=msg["schedules"],
+        days_of_week=msg.get("days_of_week"),
+        interval_days=msg["interval_days"],
+        anchor_date=msg.get("anchor_date"),
+        notify_service=msg.get("notify_service"),
+        nfc_tag_id=(msg.get("nfc_tag_id") or "").strip() or None,
+        notification_enabled=msg["notification_enabled"],
+        member_ids=msg.get("member_ids"),
+    )
+    await async_refresh(hass)
+    return {"group_id": group.group_id}
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): PREFIX + "delete_group", vol.Required("group_id"): str}
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+@_handler
+async def ws_delete_group(hass, connection, msg):
+    """Delete a group (its medications are kept)."""
+    await get_runtime(hass)["manager"].async_delete_group(msg["group_id"])
+    await async_refresh(hass)
+    return {"ok": True}
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): PREFIX + "move_medication",
+        vol.Required("medication_id"): str,
+        vol.Required("group_id"): vol.Any(None, str),
+        vol.Optional("index"): vol.Any(None, vol.All(int, vol.Range(min=0))),
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+@_handler
+async def ws_move_medication(hass, connection, msg):
+    """Drag-and-drop: move or reorder a medication."""
+    await get_runtime(hass)["manager"].async_move_medication(
+        msg["medication_id"], msg["group_id"] or None, msg.get("index")
+    )
+    await async_refresh(hass)
+    return {"ok": True}
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): PREFIX + "reorder_groups",
+        vol.Required("profile_id"): str,
+        vol.Required("group_ids"): [str],
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+@_handler
+async def ws_reorder_groups(hass, connection, msg):
+    """Drag-and-drop: reorder a person's groups."""
+    await get_runtime(hass)["manager"].async_reorder_groups(msg["profile_id"], msg["group_ids"])
+    await async_refresh(hass)
+    return {"ok": True}
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): PREFIX + "quick_add",
+        vol.Required("profile_name"): vol.All(str, vol.Length(min=1)),
+        vol.Required("items"): vol.All(
+            [{vol.Required("name"): str, vol.Optional("dosage"): vol.Any(None, str)}], vol.Length(min=1, max=100)
+        ),
+        vol.Optional("group_id"): vol.Any(None, str),
+        vol.Optional("new_group"): vol.Any(
+            None,
+            {
+                vol.Required("name"): str,
+                vol.Optional("schedules"): [str],
+                vol.Optional("days_of_week"): vol.Any(None, [vol.All(int, vol.Range(min=0, max=6))]),
+                vol.Optional("notify_service"): vol.Any(None, str),
+            },
+        ),
+        vol.Optional("schedules"): [str],
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+@_handler
+async def ws_quick_add(hass, connection, msg):
+    """Add many medications in one go."""
+    result = await get_runtime(hass)["manager"].async_quick_add(
+        profile_name=msg["profile_name"],
+        items=msg["items"],
+        group_id=msg.get("group_id"),
+        new_group=msg.get("new_group"),
+        schedules=msg.get("schedules"),
+    )
+    await async_refresh(hass)
+    return result
 
 
 @websocket_api.websocket_command(
@@ -405,6 +533,11 @@ def async_register_commands(hass: HomeAssistant) -> None:
         ws_snooze,
         ws_refill,
         ws_save_medication,
+        ws_save_group,
+        ws_delete_group,
+        ws_move_medication,
+        ws_reorder_groups,
+        ws_quick_add,
         ws_delete_medication,
         ws_delete_dose,
         ws_reset_history,
