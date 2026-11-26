@@ -7,7 +7,10 @@ from collections import defaultdict
 from collections.abc import Iterable
 from copy import deepcopy
 from datetime import date, datetime, time, timedelta
+import json
+import logging
 import math
+from pathlib import Path
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -42,10 +45,22 @@ from .const import (
     SETTING_PROFILE_TAGS,
     SETTING_QUIET_END,
     SETTING_QUIET_START,
+    BACKUP_DIR,
+    BACKUP_FORMAT,
+    BACKUP_KEEP,
+    FOOD_NOTES,
+    SETTING_LAST_WEEKLY,
+    SETTING_PAUSES,
+    SETTING_PROFILE_NOTIFY,
+    SETTING_WEEKLY_DAY,
+    SETTING_WEEKLY_SERVICE,
+    VERSION,
 )
 from .medication_database import MedicationDatabase
 from .models import DoseLog, Group, Medication
 from .store import MedicationTrackerStore
+
+_LOGGER = logging.getLogger(__name__)
 
 # How long after a scheduled time a "take all" or tag scan still counts as that dose.
 LATE_WINDOW = timedelta(hours=12)
@@ -141,6 +156,9 @@ class MedicationTrackerManager:
         anchor_date: str | None = None,
         escalate_after_minutes: int | None = None,
         group_id: str | None = None,
+        food_note: str | None = None,
+        keep_apart: list[str] | None = None,
+        keep_apart_minutes: int | None = None,
     ) -> Medication:
         """Create or update a medication."""
         existing = self.medications.get(medication_id)
@@ -183,6 +201,23 @@ class MedicationTrackerManager:
             escalate_value = existing.escalate_after_minutes if existing else 0
         else:
             escalate_value = max(int(escalate_after_minutes), 0)
+        if food_note is None:
+            food_value = existing.food_note if existing else ""
+        else:
+            food_value = food_note or ""
+            if food_value and food_value not in FOOD_NOTES:
+                raise HomeAssistantError(f"food_note must be one of: {', '.join(FOOD_NOTES)}.")
+        if keep_apart is None:
+            apart_value = list(existing.keep_apart) if existing else []
+        else:
+            apart_value = [m for m in dict.fromkeys(keep_apart) if m != medication_id]
+            unknown = [m for m in apart_value if m not in self.medications]
+            if unknown:
+                raise HomeAssistantError(f"Unknown medication to keep apart from: {unknown[0]}")
+        if keep_apart_minutes is None:
+            apart_minutes = existing.keep_apart_minutes if existing else 120
+        else:
+            apart_minutes = max(15, min(int(keep_apart_minutes or 120), 720))
         database_entry = self.database.get(database_entry_id) if database_entry_id else None
         computed_purpose = purpose or (database_entry.get("purpose", "") if database_entry else "")
         computed_form = form or (database_entry.get("form", "") if database_entry else "")
@@ -236,6 +271,9 @@ class MedicationTrackerManager:
             escalate_after_minutes=escalate_value,
             last_escalation_notification=existing.last_escalation_notification if existing else None,
             group_id=group_value,
+            food_note=food_value,
+            keep_apart=apart_value,
+            keep_apart_minutes=apart_minutes,
             sort_order=(
                 existing.sort_order
                 if existing and existing.group_id == group_value
@@ -742,6 +780,19 @@ class MedicationTrackerManager:
                     except ValueError as err:
                         raise HomeAssistantError(f"{key} must be HH:MM.") from err
                 self.settings[key] = value or None
+            elif key == SETTING_PROFILE_NOTIFY:
+                self.settings[key] = {
+                    str(profile): str(service).strip()
+                    for profile, service in (value or {}).items()
+                    if profile and str(service or "").strip()
+                }
+            elif key == SETTING_WEEKLY_SERVICE:
+                self.settings[key] = value or None
+            elif key == SETTING_WEEKLY_DAY:
+                day = int(value if value is not None else 6)
+                if day < 0 or day > 6:
+                    raise HomeAssistantError("weekly_summary_day must be 0 (Monday) to 6 (Sunday).")
+                self.settings[key] = day
             elif key == SETTING_PROFILE_TAGS:
                 self.settings[key] = {
                     str(tag).strip(): str(profile)
@@ -755,7 +806,11 @@ class MedicationTrackerManager:
         """Return the notify service to use for a medication."""
         if caregiver and medication.caregiver_notify_service:
             return medication.caregiver_notify_service
-        return medication.notify_service or self.settings.get(SETTING_DEFAULT_NOTIFY)
+        return (
+            medication.notify_service
+            or self.settings.get(SETTING_PROFILE_NOTIFY, {}).get(medication.profile_id)
+            or self.settings.get(SETTING_DEFAULT_NOTIFY)
+        )
 
     def list_medications(self) -> Iterable[Medication]:
         """Return all medications."""
@@ -891,6 +946,11 @@ class MedicationTrackerManager:
             "notification_enabled": medication.notification_enabled,
             "notify_service": medication.notify_service,
             "effective_notify_service": self.resolve_notify_service(medication),
+            "food_note": medication.food_note,
+            "keep_apart": list(medication.keep_apart),
+            "keep_apart_minutes": medication.keep_apart_minutes,
+            "conflicts": self.get_conflicts(medication),
+            "paused": self.is_paused(medication.profile_id, now.date()),
             "caregiver_name": medication.caregiver_name,
             "caregiver_notify_service": medication.caregiver_notify_service,
             "confirmation_required": medication.confirmation_required,
@@ -1125,6 +1185,7 @@ class MedicationTrackerManager:
                             "notify_service": notify_service,
                             "scheduled_time": due_schedule,
                             "display_time": self._effective_due_start(medication, due_schedule),
+                            "food_note": medication.food_note,
                             "repeat": is_repeat,
                             **self._item_group(medication),
                         }
@@ -1184,6 +1245,7 @@ class MedicationTrackerManager:
                             "medication_name": medication.name,
                             "dosage": medication.dosage,
                             "remaining": remaining,
+                            "days_left": self._days_remaining(medication),
                             "notify_service": notify_service,
                             "scheduled_time": None,
                         }
@@ -1276,6 +1338,292 @@ class MedicationTrackerManager:
             medication.last_escalation_notification = scheduled_time.isoformat()
         await self._async_save()
 
+    # ------------------------------------------------------------------
+    # 0.6.0: labels, pauses, interactions, backups, weekly summary
+    # ------------------------------------------------------------------
+
+    def _label(self, item: dict[str, Any]) -> str:
+        """Medication name and dose for a notification line, with any food instruction."""
+        text = f"{item['medication_name']} ({item['dosage']})"
+        note = FOOD_NOTES.get(item.get("food_note") or "")
+        return f"{text} - {note}" if note else text
+
+    @staticmethod
+    def _days_left_text(item: dict[str, Any]) -> str:
+        days = item.get("days_left")
+        return f" (about {days} day{'s' if days != 1 else ''} left)" if days is not None else ""
+
+    def is_paused(self, profile_id: str, day: date) -> bool:
+        """Return whether reminders are paused for a person on a calendar day."""
+        iso = day.isoformat()
+        for pause in self.settings.get(SETTING_PAUSES, []):
+            if pause.get("profile_id") not in (None, profile_id):
+                continue
+            if pause["start"] <= iso <= pause["end"]:
+                return True
+        return False
+
+    async def async_add_pause(
+        self, *, end: str, start: str | None = None, profile_id: str | None = None
+    ) -> None:
+        """Pause reminders and missed-dose counting for a date range (inclusive)."""
+        today = dt_util.now().date()
+        start_date = self._parse_date(start, "start") if start else today
+        end_date = self._parse_date(end, "end")
+        if end_date is None or start_date is None:
+            raise HomeAssistantError("Choose the last day of the pause.")
+        if end_date < start_date:
+            raise HomeAssistantError("The pause cannot end before it starts.")
+        if (end_date - start_date).days > 365:
+            raise HomeAssistantError("A pause can be at most a year long.")
+        if profile_id and profile_id not in self.list_profiles():
+            raise HomeAssistantError(f"Unknown person: {profile_id}")
+        pauses = list(self.settings.get(SETTING_PAUSES, []))
+        pauses.append(
+            {"profile_id": profile_id or None, "start": start_date.isoformat(), "end": end_date.isoformat()}
+        )
+        self.settings[SETTING_PAUSES] = pauses
+        await self._async_save()
+
+    async def async_remove_pause(self, index: int | None = None, profile_id: str | None = None) -> None:
+        """Remove one pause by position, or every pause that covers today for a person (or everyone)."""
+        pauses = list(self.settings.get(SETTING_PAUSES, []))
+        if index is not None:
+            if index < 0 or index >= len(pauses):
+                raise HomeAssistantError("That pause no longer exists.")
+            pauses.pop(index)
+        else:
+            today = dt_util.now().date().isoformat()
+            pauses = [
+                p
+                for p in pauses
+                if not (p["start"] <= today <= p["end"] and (profile_id is None or p.get("profile_id") == profile_id))
+            ]
+        self.settings[SETTING_PAUSES] = pauses
+        await self._async_save()
+
+    def get_pauses_view(self) -> list[dict[str, Any]]:
+        """Pauses that have not finished yet, for the panel."""
+        today = dt_util.now().date().isoformat()
+        names = self.list_profiles()
+        rows = []
+        for index, pause in enumerate(self.settings.get(SETTING_PAUSES, [])):
+            if pause["end"] < today:
+                continue
+            rows.append(
+                {
+                    "index": index,
+                    "profile_id": pause.get("profile_id"),
+                    "profile_name": names.get(pause.get("profile_id"), "Everyone") if pause.get("profile_id") else "Everyone",
+                    "start": pause["start"],
+                    "end": pause["end"],
+                    "active": pause["start"] <= today <= pause["end"],
+                }
+            )
+        return rows
+
+    @staticmethod
+    def _minutes(schedule: str) -> int:
+        return int(schedule[:2]) * 60 + int(schedule[3:5])
+
+    def get_conflicts(self, medication: Medication) -> list[dict[str, Any]]:
+        """Medications that are scheduled closer together than they should be."""
+        if medication.as_needed:
+            return []
+        ids = set(medication.keep_apart) | {
+            other.medication_id for other in self.medications.values() if medication.medication_id in other.keep_apart
+        }
+        ids.discard(medication.medication_id)
+        conflicts = []
+        for other_id in sorted(ids):
+            other = self.medications.get(other_id)
+            if other is None or other.as_needed:
+                continue
+            window = max(
+                medication.keep_apart_minutes if other_id in medication.keep_apart else 0,
+                other.keep_apart_minutes if medication.medication_id in other.keep_apart else 0,
+            )
+            gaps = []
+            for a in medication.schedules:
+                for b in other.schedules:
+                    gap = abs(self._minutes(a) - self._minutes(b))
+                    gaps.append(min(gap, 1440 - gap))
+            if gaps and min(gaps) < window:
+                conflicts.append(
+                    {
+                        "medication_id": other_id,
+                        "medication_name": other.name,
+                        "gap_minutes": min(gaps),
+                        "required_minutes": window,
+                    }
+                )
+        return conflicts
+
+    def keep_apart_warnings(self, medication_id: str, now: datetime | None = None) -> list[str]:
+        """Warnings for a dose that was just taken too close to one it should be kept apart from."""
+        now = now or dt_util.now()
+        medication = self._get_medication(medication_id)
+        ids = set(medication.keep_apart) | {
+            other.medication_id for other in self.medications.values() if medication_id in other.keep_apart
+        }
+        ids.discard(medication_id)
+        warnings = []
+        for other_id in sorted(ids):
+            other = self.medications.get(other_id)
+            if other is None or not other.dose_logs:
+                continue
+            window = max(
+                medication.keep_apart_minutes if other_id in medication.keep_apart else 0,
+                other.keep_apart_minutes if medication_id in other.keep_apart else 0,
+            )
+            ago = (now - dt_util.as_local(other.dose_logs[-1].taken_at)).total_seconds() / 60
+            if 0 <= ago < window:
+                warnings.append(
+                    f"{other.name} was taken {int(ago)} minutes ago. Leave about {window} minutes between it "
+                    f"and {medication.name}."
+                )
+        return warnings
+
+    # ----------------------------------------------------------- backups
+
+    def export_data(self) -> dict[str, Any]:
+        """Everything needed to rebuild this installation."""
+        return {
+            "format": BACKUP_FORMAT,
+            "version": VERSION,
+            "exported_at": dt_util.now().isoformat(),
+            "medications": [m.as_dict() for m in self.medications.values()],
+            "groups": [g.as_dict() for g in self.groups.values()],
+            "settings": deepcopy(self.settings),
+        }
+
+    async def async_import_data(self, data: Any) -> dict[str, int]:
+        """Replace all data with the contents of a backup."""
+        if not isinstance(data, dict) or data.get("format") != BACKUP_FORMAT:
+            raise HomeAssistantError("That does not look like a Medication Tracker backup file.")
+        try:
+            medications = {
+                item["medication_id"]: Medication.from_dict(item) for item in data.get("medications", [])
+            }
+            groups = {item["group_id"]: Group.from_dict(item) for item in data.get("groups", [])}
+        except (KeyError, ValueError, TypeError) as err:
+            raise HomeAssistantError("The backup file is damaged or incomplete.") from err
+        settings = deepcopy(DEFAULT_SETTINGS)
+        stored = data.get("settings")
+        if isinstance(stored, dict):
+            for key in DEFAULT_SETTINGS:
+                if stored.get(key) is not None:
+                    settings[key] = stored[key]
+        for medication in medications.values():
+            if medication.group_id and medication.group_id not in groups:
+                medication.group_id = None
+        await self._async_write_backup("before_restore")  # a safety copy of what is being replaced
+        self.medications.clear()
+        self.medications.update(medications)
+        self.groups.clear()
+        self.groups.update(groups)
+        self.settings.clear()
+        self.settings.update(settings)
+        self._prune_old_logs()
+        self._sync_groups()
+        await self._async_save()
+        return {"medications": len(medications), "groups": len(groups)}
+
+    async def _async_write_backup(self, label: str) -> bool:
+        """Write a backup file into the Home Assistant config folder. Never raises."""
+        if not self.medications and not self.groups:
+            return False
+        try:
+            folder = Path(self.hass.config.path(BACKUP_DIR))
+            payload = json.dumps(self.export_data())
+            name = f"medication_tracker_{label}.json"
+
+            def _write() -> None:
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / name).write_text(payload, encoding="utf-8")
+                daily = sorted(folder.glob("medication_tracker_20??-??-??.json"))
+                for old in daily[:-BACKUP_KEEP]:
+                    old.unlink()
+
+            await self.hass.async_add_executor_job(_write)
+            return True
+        except Exception:  # noqa: BLE001 - a backup problem must never stop reminders
+            _LOGGER.warning("Could not write a Medication Tracker backup", exc_info=True)
+            return False
+
+    async def async_auto_backup(self) -> None:
+        """Write one backup file per day (the last two weeks are kept)."""
+        today = dt_util.now().date()
+        if getattr(self, "_last_backup_date", None) == today:
+            return
+        self._last_backup_date = today
+        await self._async_write_backup(today.isoformat())
+
+    # ---------------------------------------------------- weekly summary
+
+    def get_weekly_summary(self, now: datetime | None = None) -> dict[str, Any] | None:
+        """Adherence for the last seven full days, per person."""
+        now = now or dt_util.now()
+        end = now.date() - timedelta(days=1)
+        start = end - timedelta(days=6)
+        people: dict[str, dict[str, Any]] = {}
+        for medication in self.medications.values():
+            if medication.as_needed:
+                continue
+            state = self._match_state(medication, now)
+            for occurrence in state.occurrences:
+                if occurrence.date() < start or occurrence.date() > end:
+                    continue
+                person = people.setdefault(
+                    medication.profile_id,
+                    {"name": medication.profile_name, "expected": 0, "taken": 0, "skipped": 0, "missed": [], "low": []},
+                )
+                if occurrence.isoformat() in medication.skipped_occurrences:
+                    person["skipped"] += 1
+                    continue
+                person["expected"] += 1
+                if occurrence in state.matched:
+                    person["taken"] += 1
+                else:
+                    person["missed"].append(f"{medication.name} ({occurrence.strftime('%a')})")
+        for medication in self.medications.values():
+            if self._needs_refill(medication):
+                person = people.setdefault(
+                    medication.profile_id,
+                    {"name": medication.profile_name, "expected": 0, "taken": 0, "skipped": 0, "missed": [], "low": []},
+                )
+                person["low"].append(medication.name)
+        if not people:
+            return None
+        lines = []
+        for person in sorted(people.values(), key=lambda p: p["name"].lower()):
+            if person["expected"]:
+                pct = round(100 * person["taken"] / person["expected"])
+                line = f"{person['name']}: {person['taken']} of {person['expected']} doses taken ({pct}%)"
+            else:
+                line = f"{person['name']}: nothing was scheduled"
+            if person["missed"]:
+                shown = ", ".join(person["missed"][:6])
+                more = len(person["missed"]) - 6
+                line += f". Missed: {shown}{f' and {more} more' if more > 0 else ''}"
+            if person["low"]:
+                line += f". Running low: {', '.join(sorted(person['low']))}"
+            lines.append(line)
+        return {"people": list(people.values()), "message": "Last week:\n" + "\n".join(lines)}
+
+    def weekly_summary_due(self, now: datetime | None = None) -> bool:
+        """True once on the chosen weekday from 09:00, if a summary phone is set."""
+        now = now or dt_util.now()
+        if not self.settings.get(SETTING_WEEKLY_SERVICE):
+            return False
+        if now.weekday() != int(self.settings.get(SETTING_WEEKLY_DAY, 6)) or now.hour < 9:
+            return False
+        return self.settings.get(SETTING_LAST_WEEKLY) != now.date().isoformat()
+
+    async def async_mark_weekly_sent(self, day: date) -> None:
+        self.settings[SETTING_LAST_WEEKLY] = day.isoformat()
+        await self._async_save()
+
     async def _async_save(self) -> None:
         """Persist medication state."""
         await self.store.async_save(self.medications, self.settings, self.groups)
@@ -1361,6 +1709,8 @@ class MedicationTrackerManager:
         if medication.as_needed:
             return False
         if medication.end_date and day > medication.end_date:
+            return False
+        if self.is_paused(medication.profile_id, day):
             return False
         if medication.interval_days > 1:
             anchor = medication.anchor_date or medication.start_date
@@ -1667,12 +2017,11 @@ class MedicationTrackerManager:
 
         if len(sorted_due_medications) == 1:
             message = (
-                f"{prefix}{first['profile_name']} is due to take {first['medication_name']} "
-                f"({first['dosage']}) at {when}."
+                f"{prefix}{first['profile_name']} is due to take {self._label(first)} at {when}."
             )
         elif single_group:
             title = first["group_name"] or title
-            lines = "\n".join(f"- {item['medication_name']} ({item['dosage']})" for item in sorted_due_medications)
+            lines = "\n".join(f"- {self._label(item)}" for item in sorted_due_medications)
             message = (
                 f"{prefix}{first['profile_name']}: {len(sorted_due_medications)} to take at {when}:\n{lines}"
             )
@@ -1681,12 +2030,12 @@ class MedicationTrackerManager:
             for item in sorted_due_medications:
                 sections.setdefault(item.get("group_name"), []).append(item)
             if len(sections) == 1:
-                lines = "\n".join(f"- {i['medication_name']} ({i['dosage']})" for i in sorted_due_medications)
+                lines = "\n".join(f"- {self._label(i)}" for i in sorted_due_medications)
             else:
                 blocks = []
                 for group_name in sorted(sections, key=lambda g: (g is None, (g or "").lower())):
                     heading = f"{group_name}:" if group_name else "Other:"
-                    rows = "\n".join(f"- {i['medication_name']} ({i['dosage']})" for i in sections[group_name])
+                    rows = "\n".join(f"- {self._label(i)}" for i in sections[group_name])
                     blocks.append(f"{heading}\n{rows}")
                 lines = "\n".join(blocks)
             message = (
@@ -1859,11 +2208,11 @@ class MedicationTrackerManager:
         if len(sorted_refill_medications) == 1:
             message = (
                 f"{first['medication_name']} is running low for {first['profile_name']} "
-                f"with {first['remaining']:g} doses remaining."
+                f"with {first['remaining']:g} doses remaining{self._days_left_text(first)}."
             )
         else:
             medication_lines = "\n".join(
-                f"- {item['medication_name']} ({item['dosage']}): {item['remaining']:g} doses remaining"
+                f"- {item['medication_name']} ({item['dosage']}): {item['remaining']:g} doses remaining{self._days_left_text(item)}"
                 for item in sorted_refill_medications
             )
             message = (

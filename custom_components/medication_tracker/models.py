@@ -130,6 +130,9 @@ class Medication:
     last_escalation_notification: str | None = None
     group_id: str | None = None
     sort_order: int = 0
+    food_note: str = ""
+    keep_apart: list[str] = field(default_factory=list)
+    keep_apart_minutes: int = 120
     created_at: str | None = None
     last_due_sent_at: str | None = None
     due_repeat_count: int = 0
@@ -180,6 +183,9 @@ class Medication:
             "last_escalation_notification": self.last_escalation_notification,
             "group_id": self.group_id,
             "sort_order": self.sort_order,
+            "food_note": self.food_note,
+            "keep_apart": self.keep_apart,
+            "keep_apart_minutes": self.keep_apart_minutes,
             "created_at": self.created_at,
             "last_due_sent_at": self.last_due_sent_at,
             "due_repeat_count": self.due_repeat_count,
@@ -236,6 +242,9 @@ class Medication:
             last_escalation_notification=data.get("last_escalation_notification"),
             group_id=data.get("group_id"),
             sort_order=int(data.get("sort_order", 0) or 0),
+            food_note=data.get("food_note", "") or "",
+            keep_apart=list(data.get("keep_apart", []) or []),
+            keep_apart_minutes=int(data.get("keep_apart_minutes", 120) or 120),
             created_at=data.get("created_at"),
             last_due_sent_at=data.get("last_due_sent_at"),
             due_repeat_count=data.get("due_repeat_count", 0),

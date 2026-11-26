@@ -31,6 +31,7 @@ from .const import (
     SETTING_ANNOUNCE_SERVICE,
     SETTING_CRITICAL,
     SETTING_FALLBACK_NOTIFY,
+    SETTING_WEEKLY_SERVICE,
     SIGNAL_ALERTS_UPDATED,
 )
 from .manager import MedicationTrackerManager
@@ -74,7 +75,40 @@ class MedicationAlertEngine:
                         alert["type"],
                         alert["scheduled_time"],
                     )
+        try:
+            await self._async_weekly_summary()
+            await self.manager.async_auto_backup()
+        except Exception:  # noqa: BLE001 - housekeeping must never break reminders
+            _LOGGER.exception("Weekly summary or backup failed")
         async_dispatcher_send(self.hass, SIGNAL_ALERTS_UPDATED)
+
+    async def _async_weekly_summary(self) -> None:
+        """Send last week's adherence once on the chosen day."""
+        now = dt_util.now()
+        if not self.manager.weekly_summary_due(now):
+            return
+        # Mark first: a broken phone must not mean a retry every minute.
+        await self.manager.async_mark_weekly_sent(now.date())
+        summary = self.manager.get_weekly_summary(now)
+        service = self.manager.settings.get(SETTING_WEEKLY_SERVICE)
+        if not summary or not service:
+            return
+        delivered = await self._async_send_mobile_notification(
+            notify_service=service,
+            medication_id="weekly_summary",
+            message=summary["message"],
+            notification_tag=f"{DOMAIN}_weekly_summary",
+            actions=[],
+            critical=False,
+            title="Medication Tracker: your week",
+        )
+        if not delivered:
+            persistent_notification.async_create(
+                self.hass,
+                message=summary["message"],
+                title="Medication Tracker: your week",
+                notification_id=f"{DOMAIN}_weekly_summary",
+            )
 
     async def async_send_test_alert(self, medication_id: str, alert_type: str) -> bool:
         """Send a test alert for a medication without mutating alert markers."""
@@ -318,7 +352,8 @@ class MedicationAlertEngine:
                 "url": PANEL_PATH,
                 "tag": notification_tag or f"{DOMAIN}_{medication_id}",
                 "actions": actions
-                or [{"action": f"{ACTION_CONFIRMED_PREFIX}{medication_id}", "title": "Taken"}],
+                if actions is not None
+                else [{"action": f"{ACTION_CONFIRMED_PREFIX}{medication_id}", "title": "Taken"}],
             },
         }
         if critical:

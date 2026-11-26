@@ -436,3 +436,32 @@ set_medication_group:
         number:
           min: 0
           mode: box
+
+pause_reminders:
+  name: Pause reminders
+  description: Holiday mode. No reminders and no missed doses are counted between the two dates (inclusive). Leave profile_id empty to pause everyone.
+  fields:
+    end_date:
+      required: true
+      example: "2026-12-24"
+      selector:
+        date:
+    start_date:
+      required: false
+      description: First day of the pause (defaults to today).
+      selector:
+        date:
+    profile_id:
+      required: false
+      selector:
+        text:
+
+resume_reminders:
+  name: Resume reminders
+  description: End any pause that covers today.
+  fields:
+    profile_id:
+      required: false
+      description: Only end the pause for this person (leave empty to end all that cover today).
+      selector:
+        text:

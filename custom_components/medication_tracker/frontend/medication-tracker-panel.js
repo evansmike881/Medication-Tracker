@@ -56,6 +56,9 @@
     end_date: "",
     escalate_after_minutes: 0,
     group_id: "",
+    food_note: "",
+    keep_apart: [],
+    keep_apart_minutes: 120,
   });
 
   const blankGroup = (profiles) => ({
@@ -112,7 +115,38 @@
     end_date: s.end_date || "",
     escalate_after_minutes: s.escalate_after_minutes ?? 0,
     group_id: s.group_id || "",
+    food_note: s.food_note || "",
+    keep_apart: [...(s.keep_apart || [])],
+    keep_apart_minutes: s.keep_apart_minutes || 120,
   });
+
+  const store = {
+    get(key) {
+      try {
+        return window.localStorage.getItem(key);
+      } catch (_err) {
+        return null;
+      }
+    },
+    set(key, value) {
+      try {
+        window.localStorage.setItem(key, value);
+      } catch (_err) {
+        /* private mode: the setting just won't stick */
+      }
+    },
+  };
+
+  const FOOD = { with_food: "with food", empty_stomach: "empty stomach" };
+  const TEMPLATES = [
+    ["Everyday vitamins", ["Vitamin D", "Vitamin C", "Vitamin B12", "Multivitamin"]],
+    ["Minerals", ["Magnesium", "Zinc", "Calcium", "Iron"]],
+    ["Joint and heart", ["Omega 3", "Glucosamine", "CoQ10"]],
+  ];
+  const todayIso = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
 
   const num = (value) => (value === "" || value === null || value === undefined ? null : Number(value));
 
@@ -182,6 +216,24 @@
     .memberlist label { display:flex; gap:8px; align-items:center; padding:6px 0; color:var(--primary-text-color); font-size:14px; }
     textarea { width:100%; min-height:140px; }
     .hint { background:rgba(3,169,244,.1); border-radius:8px; padding:10px 14px; margin-bottom:12px; font-size:13px; }
+    .linkbtn { background:none; border:0; font:inherit; color:inherit; cursor:pointer; padding:4px 2px; text-align:left; display:flex; align-items:center; gap:8px; min-width:0; }
+    .chev { display:inline-block; width:18px; transition:transform .15s; color:var(--secondary-text-color); }
+    .collapsed-sum { color:var(--secondary-text-color); font-size:13px; }
+    .zone.collapsed .mrow, .zone.collapsed .emptyhint { display:none; }
+    .zone.collapsed { min-height:14px; padding:0; }
+    .zone.nope { border-color:var(--error-color,#c62828); background:rgba(198,40,40,.08); }
+    .search { width:100%; margin-bottom:12px; }
+    .tag { font-size:11px; padding:2px 8px; border-radius:10px; background:rgba(3,169,244,.14); color:var(--primary-text-color); white-space:nowrap; }
+    .warnline { color:#b26a00; font-size:12px; }
+    .iconbtn { background:none; border:1px solid rgba(255,255,255,.5); color:inherit; border-radius:16px; padding:4px 10px; cursor:pointer; font:inherit; font-size:13px; }
+    .large button.btn { padding:14px 22px; font-size:17px; }
+    .large .handle { font-size:26px; min-width:48px; min-height:52px; }
+    .large .row, .large .mrow { padding:14px 0; font-size:17px; }
+    .large .sub { font-size:15px; }
+    .large input, .large select { font-size:17px; padding:12px; }
+    .report h3 { margin:16px 0 6px; }
+    .report table { margin-bottom:8px; }
+    @media print { .bar, .tabs, .noprint, .toastbox { display:none !important; } :host { background:#fff; color:#000; } main { max-width:none; padding:0; } .card { box-shadow:none; border:1px solid #ccc; break-inside:avoid; } }
     @media (max-width:600px) { main { padding:8px; } .hide-narrow { display:none; } }
   `;
 
@@ -195,6 +247,22 @@
       this._gform = null;
       this._quick = null;
       this._drag = null;
+      this._pauseForm = null;
+      this._report = false;
+      this._search = "";
+      this._todayOpen = {};
+      let collapsed = [];
+      try {
+        collapsed = JSON.parse(store.get("mt_collapsed") || "[]");
+      } catch (_err) {
+        collapsed = [];
+      }
+      this._collapsed = new Set(Array.isArray(collapsed) ? collapsed : []);
+      const savedLarge = store.get("mt_large");
+      this._large =
+        savedLarge === null
+          ? !!(window.matchMedia && window.matchMedia("(pointer: coarse) and (min-width: 700px)").matches)
+          : savedLarge === "1";
       this._settingsDraft = null;
       this._toast = null;
       this._scan = null;
@@ -209,7 +277,11 @@
     }
 
     get _editing() {
-      return this._form || this._gform || this._quick;
+      return this._form || this._gform || this._quick || this._pauseForm;
+    }
+
+    _saveCollapsed() {
+      store.set("mt_collapsed", JSON.stringify([...this._collapsed]));
     }
 
     set hass(hass) {
@@ -312,11 +384,99 @@
           this._form = null;
           this._gform = null;
           this._quick = null;
+          this._pauseForm = null;
+          this._report = false;
           if (tab === "settings") this._settingsDraft = JSON.parse(JSON.stringify(this._state.settings));
           this._render();
           break;
         case "take":
-          this._run({ type: "medication_tracker/take", medication_id: id }, "Marked as taken");
+          this._run({ type: "medication_tracker/take", medication_id: id }, "Marked as taken").then((r) => {
+            if (r && r.warnings && r.warnings.length) this._say(r.warnings[0], true);
+          });
+          break;
+        case "toggle-group":
+          if (this._collapsed.has(id)) this._collapsed.delete(id);
+          else this._collapsed.add(id);
+          this._saveCollapsed();
+          this._render();
+          break;
+        case "collapse-all":
+          for (const g of this._state.groups || []) this._collapsed.add(g.group_id);
+          this._saveCollapsed();
+          this._render();
+          break;
+        case "expand-all":
+          this._collapsed.clear();
+          this._saveCollapsed();
+          this._render();
+          break;
+        case "toggle-block": {
+          const key = target.dataset.key;
+          this._todayOpen[key] = !(target.dataset.open === "1");
+          this._render();
+          break;
+        }
+        case "toggle-large":
+          this._large = !this._large;
+          store.set("mt_large", this._large ? "1" : "0");
+          this._render();
+          break;
+        case "duplicate": {
+          const snap = this._state.medications.find((m) => m.medication_id === id);
+          if (snap) {
+            this._form = { ...formFromSnapshot(snap), medication_id: null, medication_name: `${snap.medication_name} (copy)`, quantity: "", nfc_tag_id: "", database_entry_id: null };
+            this._tab = "medications";
+            this._render();
+          }
+          break;
+        }
+        case "template": {
+          const tpl = TEMPLATES[Number(index)];
+          if (tpl && this._quick) {
+            const have = this._quick.text.trim() ? this._quick.text.replace(/\s+$/, "") + "\n" : "";
+            this._quick.text = have + tpl[1].map((n) => `${n}, 1 tablet`).join("\n");
+            this._render();
+          }
+          break;
+        }
+        case "pause-open":
+          this._pauseForm = { profile_id: "", start: todayIso(), end: "" };
+          this._render();
+          break;
+        case "pause-save": {
+          const f = this._pauseForm;
+          if (!f.end) return this._say("Choose the last day of the pause", true);
+          if (f.end < f.start) return this._say("The pause cannot end before it starts", true);
+          this._run(
+            { type: "medication_tracker/add_pause", profile_id: f.profile_id || null, start: f.start || null, end: f.end },
+            "Reminders paused"
+          ).then((r) => {
+            if (r) {
+              this._pauseForm = null;
+              this._render();
+            }
+          });
+          break;
+        }
+        case "resume":
+          this._run({ type: "medication_tracker/remove_pause", index: Number(index) }, "Reminders resumed");
+          break;
+        case "report-open":
+          this._report = true;
+          this._render();
+          break;
+        case "report-close":
+          this._report = false;
+          this._render();
+          break;
+        case "print":
+          window.print();
+          break;
+        case "backup-download":
+          this._downloadBackup();
+          break;
+        case "backup-restore":
+          this.shadowRoot.querySelector("input[data-restore]")?.click();
           break;
         case "take-all":
           this._run(
@@ -430,6 +590,7 @@
           this._form = null;
           this._gform = null;
           this._quick = null;
+          this._pauseForm = null;
           this._render();
           break;
         case "save":
@@ -533,6 +694,9 @@
               announce_only_when_home_entity: this._settingsDraft.announce_only_when_home_entity || null,
               quiet_hours_start: this._settingsDraft.quiet_hours_start || null,
               quiet_hours_end: this._settingsDraft.quiet_hours_end || null,
+              profile_notify_services: this._settingsDraft.profile_notify_services || {},
+              weekly_summary_service: this._settingsDraft.weekly_summary_service || null,
+              weekly_summary_day: Number(this._settingsDraft.weekly_summary_day ?? 6),
             },
             "Settings saved"
           );
@@ -566,6 +730,8 @@
         const groups = this._groupsFor(f.profile_name);
         if (f.group_id && !groups.some((g) => g.group_id === f.group_id)) f.group_id = "";
         if (sel) sel.innerHTML = this._groupOptions(groups, f.group_id, "No group");
+        const apart = root.querySelector(".apartlist");
+        if (apart) apart.innerHTML = this._apartListHtml();
       } else if (this._quick) {
         const sel = root.querySelector("select[data-field=group_choice]");
         const groups = this._groupsFor(f.profile_name);
@@ -579,6 +745,36 @@
 
     _onInput(event) {
       const el = event.target;
+      if (el.dataset.restore !== undefined) {
+        const file = el.files && el.files[0];
+        if (file) this._restoreBackup(file);
+        el.value = "";
+        return;
+      }
+      if (el.dataset.search !== undefined) {
+        this._search = el.value;
+        const list = this.shadowRoot.querySelector(".medlist");
+        if (list) list.innerHTML = this._medListHtml();
+        return;
+      }
+      if (el.dataset.pause && this._pauseForm) {
+        this._pauseForm[el.dataset.pause] = el.value;
+        return;
+      }
+      if (el.dataset.apart !== undefined && this._form) {
+        const set = new Set(this._form.keep_apart);
+        if (el.checked) set.add(el.dataset.apart);
+        else set.delete(el.dataset.apart);
+        this._form.keep_apart = [...set];
+        return;
+      }
+      if (el.dataset.profilePhone !== undefined && this._settingsDraft) {
+        const map = { ...(this._settingsDraft.profile_notify_services || {}) };
+        if (el.value) map[el.dataset.profilePhone] = el.value;
+        else delete map[el.dataset.profilePhone];
+        this._settingsDraft.profile_notify_services = map;
+        return;
+      }
       const f = this._cur();
       if (el.dataset.day !== undefined && f) {
         const day = Number(el.dataset.day);
@@ -673,6 +869,9 @@
         dosage: f.dosage.trim() || "1 dose",
         schedules: f.as_needed || f.group_id ? [] : f.schedules,
         group_id: f.as_needed ? null : f.group_id || null,
+        food_note: f.food_note || "",
+        keep_apart: f.keep_apart || [],
+        keep_apart_minutes: Number(f.keep_apart_minutes) || 120,
         days_of_week: f.as_needed || f.group_id || f.days.length === 7 ? null : f.days,
         as_needed: !!f.as_needed,
         max_doses_per_day: Number(f.max_doses_per_day) || 0,
@@ -848,15 +1047,21 @@
       d.ghost.style.top = `${event.clientY + 8}px`;
       const root = this.shadowRoot;
       root.querySelectorAll(".dropline").forEach((n) => n.remove());
-      root.querySelectorAll(".over").forEach((n) => n.classList.remove("over"));
+      root.querySelectorAll(".over, .nope").forEach((n) => n.classList.remove("over", "nope"));
       d.target = null;
+      d.foreign = null;
       const under = root.elementFromPoint(event.clientX, event.clientY);
       if (!under) return;
       let container;
       let rows;
       if (d.kind === "med") {
         container = under.closest("[data-zone]");
-        if (!container || container.dataset.profile !== d.profile) return;
+        if (!container) return;
+        if (container.dataset.profile !== d.profile) {
+          container.classList.add("nope");
+          d.foreign = container.dataset.profile;
+          return;
+        }
         container.classList.add("over");
         rows = [...container.querySelectorAll('[data-row="med"]')].filter((r) => r !== d.row);
       } else {
@@ -865,9 +1070,13 @@
         rows = [...container.querySelectorAll(':scope > [data-row="group"]')].filter((r) => r !== d.row);
       }
       let index = 0;
-      for (const r of rows) {
-        const box = r.getBoundingClientRect();
-        if (event.clientY > box.top + box.height / 2) index += 1;
+      if (container.classList.contains("collapsed")) {
+        index = rows.length; // a folded group: drop at the end
+      } else {
+        for (const r of rows) {
+          const box = r.getBoundingClientRect();
+          if (event.clientY > box.top + box.height / 2) index += 1;
+        }
       }
       const line = document.createElement("div");
       line.className = "dropline";
@@ -896,7 +1105,11 @@
       d.ghost.remove();
       d.row.classList.remove("dragging");
       this.shadowRoot.querySelectorAll(".dropline").forEach((n) => n.remove());
-      this.shadowRoot.querySelectorAll(".over").forEach((n) => n.classList.remove("over"));
+      this.shadowRoot.querySelectorAll(".over, .nope").forEach((n) => n.classList.remove("over", "nope"));
+      if (drop && !d.target && d.foreign && d.kind === "med") {
+        const owner = (this._state.profiles || {})[d.foreign] || "someone else";
+        this._say(`That group belongs to ${owner}. A medication can only join a group for the same person.`, true);
+      }
       if (!drop || !d.target) return;
       if (d.kind === "med") this._moveMedication(d.id, d.target.zone || null, d.target.index);
       else this._moveGroup(d.id, d.profile, d.target.index);
@@ -992,6 +1205,37 @@
       if (el) el.focus();
     }
 
+    async _downloadBackup() {
+      try {
+        const data = await this._call({ type: "medication_tracker/export_data" });
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `medication-tracker-backup-${todayIso()}.json`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        this._say(`Backup saved (${data.medications.length} medications)`);
+      } catch (err) {
+        this._say((err && err.message) || "Backup failed", true);
+      }
+    }
+
+    async _restoreBackup(file) {
+      let data;
+      try {
+        data = JSON.parse(await file.text());
+      } catch (_err) {
+        return this._say("That file is not a valid backup", true);
+      }
+      const count = Array.isArray(data.medications) ? data.medications.length : 0;
+      if (!window.confirm(`Restore ${count} medication${count === 1 ? "" : "s"} from this backup? This replaces everything currently stored. A safety copy of the current data is saved first.`)) return;
+      const result = await this._run({ type: "medication_tracker/import_data", data }, null);
+      if (result) this._say(`Restored ${result.medications} medications and ${result.groups} groups`);
+    }
+
     async _exportCsv() {
       try {
         const { logs } = await this._call({ type: "medication_tracker/get_history", days: 365 });
@@ -1036,7 +1280,7 @@
           ? this._renderQuick()
           : this._renderMedications();
       } else if (this._tab === "history") {
-        body = this._renderHistory();
+        body = this._report ? this._renderReport() : this._renderHistory();
       } else {
         body = this._renderSettings();
       }
@@ -1051,9 +1295,9 @@
       const toast = `<div class="toastbox">${this._toastHtml()}</div>`;
       const scrollTop = this.scrollTop;
       root.innerHTML = `<style>${STYLE}</style>
-        <div class="bar">${this._narrow ? '<button class="menu" data-action="menu" aria-label="Menu">☰</button>' : ""}<h1>Medications</h1></div>
+        <div class="bar">${this._narrow ? '<button class="menu" data-action="menu" aria-label="Menu">☰</button>' : ""}<h1>Medications</h1><button class="iconbtn" data-action="toggle-large" aria-pressed="${this._large}" title="Bigger buttons for tablets and touch screens">${this._large ? "Aa −" : "Aa +"}</button></div>
         <div class="tabs">${tabs}</div>
-        <main>${body}</main>${toast}`;
+        <main class="${this._large ? "large" : ""}">${body}</main>${toast}`;
       this.scrollTop = scrollTop;
     }
 
@@ -1067,16 +1311,39 @@
       }
       const outstanding = s.summary.outstanding_count || 0;
       const needsRefill = s.medications.filter((m) => m.needs_refill);
+      const byIdMed = Object.fromEntries(s.medications.map((m) => [m.medication_id, m]));
       const parts = [];
+      for (const p of s.pauses || []) {
+        parts.push(`<div class="banner">⏸ Reminders paused for <b>${esc(p.profile_name)}</b> ${p.active ? "until" : "from " + esc(p.start) + " to"} ${esc(p.end)}${
+          this._isAdmin ? ` <button class="btn secondary" style="padding:4px 12px;margin-left:8px" data-action="resume" data-index="${p.index}">${p.active ? "Resume now" : "Cancel"}</button>` : ""
+        }</div>`);
+      }
+      if (this._pauseForm) {
+        const pf = this._pauseForm;
+        const people = Object.entries(s.profiles || {});
+        parts.push(`<div class="card"><h2>Pause reminders</h2>
+          <div class="sub" style="margin-bottom:12px">Going away or ill? No reminders are sent and nothing counts as missed on the days you pick.</div>
+          <div class="grid">
+            <label class="field">Who<select data-pause="profile_id"><option value="">Everyone</option>${people.map(([id, n]) => `<option value="${esc(id)}" ${pf.profile_id === id ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>
+            <label class="field">From<input type="date" data-pause="start" value="${esc(pf.start)}"></label>
+            <label class="field">Last day<input type="date" data-pause="end" value="${esc(pf.end)}"></label>
+          </div>
+          <div class="actions" style="margin-top:16px"><button class="btn big" data-action="pause-save">Pause</button><button class="btn secondary big" data-action="cancel">Cancel</button></div></div>`);
+      }
       parts.push(`<div class="card hero"><div><h2 style="margin:0">${
         outstanding ? `${outstanding} to take now` : "Nothing due right now"
       }</h2><div class="sub">${s.summary.next_due ? "Next dose " + esc(fmtDateTime(s.summary.next_due)) : "No upcoming doses"}</div></div>${
         outstanding ? '<button class="btn big" data-action="take-all">✓ Take all due</button>' : ""
       }</div>`);
+      if (this._isAdmin && !this._pauseForm) {
+        parts.push(`<div class="noprint" style="text-align:right;margin:-8px 0 12px"><button class="btn secondary" style="padding:6px 14px" data-action="pause-open">⏸ Pause reminders</button></div>`);
+      }
       if (needsRefill.length) {
-        parts.push(`<div class="banner">Running low: ${needsRefill
-          .map((m) => `${esc(m.medication_name)} (${esc(m.remaining_quantity)} left)`)
-          .join(", ")}</div>`);
+        parts.push(`<div class="banner">Running low:${needsRefill
+          .map(
+            (m) => `<div class="mrow first" style="padding:4px 0"><div class="grow">${esc(m.medication_name)} <span class="sub">${esc(m.profile_name)} · ${esc(m.remaining_quantity)} left${m.days_remaining !== null && m.days_remaining !== undefined ? ` (~${esc(m.days_remaining)} days)` : ""}</span></div><button class="btn secondary" style="padding:4px 12px" data-action="refill" data-id="${esc(m.medication_id)}">Add stock</button></div>`
+          )
+          .join("")}</div>`);
       }
       const byProfile = {};
       for (const dose of doses) (byProfile[dose.profile_name] ||= { id: dose.profile_id, doses: [] }).doses.push(dose);
@@ -1110,7 +1377,9 @@
           actions = `<div class="actions"><button class="btn secondary" data-action="undo" data-id="${id}">Undo</button></div>`;
         }
         return `<div class="row">${inGroup ? "" : `<span class="time">${esc(d.time)}</span>`}
-          <div class="grow"><div>${esc(d.medication_name)}</div><div class="sub">${esc(d.dosage)}</div></div>
+          <div class="grow"><div>${esc(d.medication_name)}${
+            byIdMed[d.medication_id] && byIdMed[d.medication_id].food_note ? ` <span class="tag">🍽 ${esc(FOOD[byIdMed[d.medication_id].food_note])}</span>` : ""
+          }</div><div class="sub">${esc(d.dosage)}</div></div>
           <span class="chip ${cls}">${esc(label)}</span>${actions}</div>`;
       };
       for (const [name, group] of Object.entries(byProfile)) {
@@ -1133,10 +1402,13 @@
             const takeBtn = ready.length
               ? `<button class="btn" data-action="take-group" data-label="${esc(blk.group_name)}" data-ids="${esc(ready.map((d) => d.medication_id).join(","))}">✓ Take all${ready.length < total ? ` (${ready.length})` : ""}</button>`
               : "";
+            const needs = blk.doses.some((d) => d.can_take || d.status === "Missed Dose");
+            const key = `${blk.group_id}|${blk.time}`;
+            const open = key in this._todayOpen ? this._todayOpen[key] : needs;
             return `<div class="block" data-block="${esc(blk.group_id)}">
-              <div class="bhead"><span class="time">${esc(blk.time)}</span><strong>${esc(blk.group_name)}</strong>
-                <span class="sub">${done} of ${total} taken</span><div class="bar2"><i style="width:${pct}%"></i></div>${takeBtn}</div>
-              ${blk.doses.map((d) => doseRow(d, true)).join("")}</div>`;
+              <div class="bhead"><button class="linkbtn" data-action="toggle-block" data-key="${esc(key)}" data-open="${open ? "1" : "0"}" aria-expanded="${open}"><span class="chev">${open ? "▾" : "▸"}</span><span class="time">${esc(blk.time)}</span><strong>${esc(blk.group_name)}</strong></button>
+                <span class="sub">${done === total ? "✓ " : ""}${done} of ${total} taken</span><div class="bar2"><i style="width:${pct}%"></i></div>${takeBtn}</div>
+              ${open ? blk.doses.map((d) => doseRow(d, true)).join("") : ""}</div>`;
           })
           .join("");
         const allBtn =
@@ -1148,7 +1420,7 @@
       return parts.join("");
     }
 
-    _medRow(m, first) {
+    _medRow(m, first, dragOk = true) {
       const admin = this._isAdmin;
       const days = m.days_of_week && m.days_of_week.length ? m.days_of_week.map((d) => DAYS[d]).join(", ") : "Every day";
       const stock =
@@ -1161,18 +1433,22 @@
         ? "⏰ with the group"
         : `⏰ ${esc((m.schedules || []).join(", "))} · ${esc(m.interval_days > 1 ? "every " + m.interval_days + " days" : days)}`;
       const handle =
-        admin && !m.as_needed
+        admin && !m.as_needed && dragOk
           ? `<button class="handle" data-drag="med" data-id="${esc(m.medication_id)}" aria-label="Move ${esc(m.medication_name)}. Drag, or use the up and down arrow keys to reorder" title="Drag to move">⠿</button>`
           : "";
+      const conflicts = (m.conflicts || [])
+        .map((c) => `<div class="warnline">⚠ Only ${esc(c.gap_minutes)} min from ${esc(c.medication_name)} (keep ${esc(c.required_minutes)} min apart)</div>`)
+        .join("");
       return `<div class="mrow ${first ? "first" : ""}" data-row="med" data-id="${esc(m.medication_id)}" data-profile="${esc(m.profile_id)}" data-label="${esc(m.medication_name)} ${esc(m.dosage)}">
         ${handle}
-        <div class="grow"><div>${esc(m.medication_name)} <span class="sub">${esc(m.dosage)}</span>${m.purpose ? ` <span class="sub">· ${esc(m.purpose)}</span>` : ""} ${m.needs_refill ? '<span class="chip warn">Refill needed</span>' : ""}</div>
+        <div class="grow"><div>${esc(m.medication_name)} <span class="sub">${esc(m.dosage)}</span>${m.purpose ? ` <span class="sub">· ${esc(m.purpose)}</span>` : ""} ${m.needs_refill ? '<span class="chip warn">Refill needed</span>' : ""}${m.food_note ? ` <span class="tag">🍽 ${esc(FOOD[m.food_note])}</span>` : ""}${m.paused ? ' <span class="tag">⏸ paused</span>' : ""}</div>
           <div class="sub">${when}${m.end_date ? ` · ${m.course_ended ? "course ended" : "until"} ${esc(m.end_date)}` : ""}</div>
           <div class="sub">📦 ${esc(stock)}${m.nfc_tag_id ? " · 🏷 NFC tag set" : ""}${m.as_needed ? "" : ` · Adherence ${esc(m.compliance_percentage)}% · ${esc(m.missed_doses)} missed`}</div>
-          <div class="sub">Next: ${esc(fmtDateTime(m.next_dose))} · Last taken: ${esc(fmtDateTime(m.last_taken))}${m.last_taken_by ? " by " + esc(m.last_taken_by) : ""}</div></div>
+          <div class="sub">Next: ${esc(fmtDateTime(m.next_dose))} · Last taken: ${esc(fmtDateTime(m.last_taken))}${m.last_taken_by ? " by " + esc(m.last_taken_by) : ""}</div>${conflicts}</div>
         <div class="actions">
           <button class="btn secondary" data-action="refill" data-id="${esc(m.medication_id)}">Add stock</button>
           ${admin ? `<button class="btn secondary" data-action="edit" data-id="${esc(m.medication_id)}">Edit</button>
+          <button class="btn secondary" data-action="duplicate" data-id="${esc(m.medication_id)}" title="Start a new medication from this one">Copy</button>
           <button class="btn danger" data-action="delete" data-id="${esc(m.medication_id)}">Delete</button>` : ""}
         </div></div>`;
     }
@@ -1180,6 +1456,7 @@
     _renderMedications() {
       const s = this._state;
       const admin = this._isAdmin;
+      const hasGroups = (s.groups || []).length > 0;
       const header = `<div class="hero" style="margin-bottom:12px"><div class="sub">${s.medications.length} medication${
         s.medications.length === 1 ? "" : "s"
       }</div>${
@@ -1187,19 +1464,32 @@
           ? '<div class="actions"><button class="btn" data-action="add">+ Add medication</button><button class="btn secondary" data-action="quick-add">Quick add several</button><button class="btn secondary" data-action="new-group">+ New group</button></div>'
           : ""
       }</div>`;
-      if (!s.medications.length && !(s.groups || []).length) {
+      if (!s.medications.length && !hasGroups) {
         return (
           header +
           `<div class="card empty"><p>No medications yet.</p>${admin ? '<p class="sub">Taking several things at the same time, like vitamins? Use <b>Quick add several</b> to type them all in one go and get a single reminder.</p>' : ""}</div>`
         );
       }
+      const tip =
+        admin && (s.medications.length > 1 || hasGroups)
+          ? `<div class="hint">Drag <b>⠿</b> to put medications into groups or change the order. A group gets one reminder and one tick-all button, but every medication is still tracked on its own.</div>`
+          : "";
+      const tools = `<div class="hero" style="margin-bottom:12px;gap:8px">
+        <input class="search" style="flex:1;margin:0;min-width:160px" type="search" data-search placeholder="Search medications…" value="${esc(this._search)}" aria-label="Search medications">
+        ${hasGroups ? '<div class="actions"><button class="btn secondary" data-action="collapse-all">Collapse groups</button><button class="btn secondary" data-action="expand-all">Expand groups</button></div>' : ""}</div>`;
+      return header + tip + tools + `<div class="medlist">${this._medListHtml()}</div>`;
+    }
+
+    _medListHtml() {
+      const s = this._state;
+      const admin = this._isAdmin;
+      const q = this._search.trim().toLowerCase();
+      const hit = (m) =>
+        !q || [m.medication_name, m.purpose, m.dosage].some((x) => (x || "").toLowerCase().includes(q));
+      const dragOk = !q;
       const people = new Map();
       for (const m of s.medications) people.set(m.profile_id, m.profile_name);
       for (const g of s.groups || []) people.set(g.profile_id, g.profile_name);
-      const tip =
-        admin && (s.medications.length > 1 || (s.groups || []).length)
-          ? `<div class="hint">Drag <b>⠿</b> to put medications into groups or change the order. A group gets one reminder and one tick-all button, but every medication is still tracked on its own.</div>`
-          : "";
       const sections = [...people.entries()]
         .sort((a, b) => a[1].localeCompare(b[1]))
         .map(([pid, name]) => {
@@ -1208,39 +1498,60 @@
           const groups = (s.groups || []).filter((g) => g.profile_id === pid).sort((a, b) => a.order - b.order);
           const groupHtml = groups
             .map((g) => {
-              const members = (g.member_ids || []).map((id) => byId[id]).filter(Boolean);
+              const all = (g.member_ids || []).map((id) => byId[id]).filter(Boolean);
+              const nameHit = q && g.name.toLowerCase().includes(q);
+              const members = q && !nameHit ? all.filter(hit) : all;
+              if (q && !nameHit && !members.length) return "";
+              const folded = !q && this._collapsed.has(g.group_id);
               const days = g.days_of_week && g.days_of_week.length ? g.days_of_week.map((d) => DAYS[d]).join(", ") : "every day";
-              const handle = admin
+              const low = all.filter((m) => m.needs_refill).length;
+              const conflicts = all.reduce((n, m) => n + (m.conflicts || []).length, 0);
+              const handle = admin && dragOk
                 ? `<button class="handle" data-drag="group" data-id="${esc(g.group_id)}" aria-label="Move group ${esc(g.name)}. Drag, or use the up and down arrow keys to reorder" title="Drag to reorder">⠿</button>`
                 : "";
               return `<div class="gcard" data-row="group" data-id="${esc(g.group_id)}" data-profile="${esc(pid)}" data-label="${esc(g.name)}">
                 <div class="mrow first" style="padding-top:0">${handle}
-                  <div class="grow"><strong>${esc(g.name)}</strong> <span class="sub">⏰ ${esc(g.schedules.join(", "))} · ${esc(g.interval_days > 1 ? "every " + g.interval_days + " days" : days)} · ${members.length} item${members.length === 1 ? "" : "s"}${g.notification_enabled ? "" : " · reminders off"}${g.nfc_tag_id ? " · 🏷 tag" : ""}</span></div>
+                  <button class="linkbtn grow" data-action="toggle-group" data-id="${esc(g.group_id)}" aria-expanded="${!folded}"><span class="chev">${folded ? "▸" : "▾"}</span><span><strong>${esc(g.name)}</strong> <span class="sub">⏰ ${esc(g.schedules.join(", "))} · ${esc(g.interval_days > 1 ? "every " + g.interval_days + " days" : days)} · ${all.length} item${all.length === 1 ? "" : "s"}${g.notification_enabled ? "" : " · reminders off"}${g.nfc_tag_id ? " · 🏷 tag" : ""}${low ? ` · ${low} low` : ""}${conflicts ? " · ⚠" : ""}</span></span></button>
                   ${admin ? `<button class="btn secondary" data-action="edit-group" data-id="${esc(g.group_id)}">Edit group</button>` : ""}</div>
-                <div class="zone" data-zone="${esc(g.group_id)}" data-profile="${esc(pid)}"><div class="zonebody">${
-                  members.length ? members.map((m, i) => this._medRow(m, i === 0)).join("") : '<div class="emptyhint">Drag medications here</div>'
+                <div class="zone ${folded ? "collapsed" : ""}" data-zone="${esc(g.group_id)}" data-profile="${esc(pid)}"><div class="zonebody">${
+                  members.length ? members.map((m, i) => this._medRow(m, i === 0, dragOk)).join("") : '<div class="emptyhint">Drag medications here</div>'
                 }</div></div></div>`;
             })
             .join("");
           const loose = meds
-            .filter((m) => !m.group_id && !m.as_needed)
+            .filter((m) => !m.group_id && !m.as_needed && hit(m))
             .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.medication_name.localeCompare(b.medication_name));
-          const prn = meds.filter((m) => m.as_needed);
-          const showZone = loose.length || groups.length;
+          const prn = meds.filter((m) => m.as_needed && hit(m));
+          const showZone = loose.length || (groups.length && !q);
+          if (q && !groupHtml && !loose.length && !prn.length) return "";
           return `<div class="card"><h2>${esc(name)}</h2>
-            ${groups.length ? `<div data-grouplist data-profile="${esc(pid)}">${groupHtml}</div>` : ""}
+            ${groupHtml ? `<div data-grouplist data-profile="${esc(pid)}">${groupHtml}</div>` : ""}
             ${
               showZone
                 ? `${groups.length ? '<div class="sub" style="margin:4px 0">Own reminder (not in a group)</div>' : ""}<div class="zone ungrouped" data-zone="" data-profile="${esc(pid)}"><div class="zonebody">${
-                    loose.length ? loose.map((m, i) => this._medRow(m, i === 0)).join("") : '<div class="emptyhint">Drag here to take a medication out of its group</div>'
+                    loose.length ? loose.map((m, i) => this._medRow(m, i === 0, dragOk)).join("") : '<div class="emptyhint">Drag here to take a medication out of its group</div>'
                   }</div></div>`
                 : ""
             }
-            ${prn.length ? `<div class="sub" style="margin:12px 0 4px">As needed</div>${prn.map((m, i) => this._medRow(m, i === 0)).join("")}` : ""}
+            ${prn.length ? `<div class="sub" style="margin:12px 0 4px">As needed</div>${prn.map((m, i) => this._medRow(m, i === 0, dragOk)).join("")}` : ""}
           </div>`;
         })
         .join("");
-      return header + tip + sections;
+      return sections || `<div class="card empty">Nothing matches "${esc(this._search)}".</div>`;
+    }
+
+    _apartListHtml() {
+      const f = this._form;
+      const pid = this._profileIdByName(f.profile_name);
+      const others = this._state.medications.filter(
+        (m) => m.profile_id === pid && m.medication_id !== f.medication_id && !m.as_needed
+      );
+      if (!others.length) return '<div class="sub">No other medications for this person yet.</div>';
+      return others
+        .map(
+          (m) => `<label><input type="checkbox" data-apart="${esc(m.medication_id)}" ${f.keep_apart.includes(m.medication_id) ? "checked" : ""}> ${esc(m.medication_name)}</label>`
+        )
+        .join("");
     }
 
     _groupOptions(groups, selected, blankLabel) {
@@ -1342,7 +1653,9 @@
           ${f.group_choice === "new" ? `<label class="field">New group name<input data-field="new_name" value="${esc(f.new_name)}" placeholder="e.g. Morning vitamins"></label>` : ""}
         </div>
         ${needsTimes ? `<h2 style="margin-top:16px">At what time${f.group_choice === "" ? " (each gets its own reminder)" : ""}?</h2><div class="times">${times}<button class="btn secondary" data-action="add-time">+ Add time</button></div>` : ""}
-        <label class="field" style="margin-top:16px">Medications<textarea data-field="text" placeholder="Vitamin D, 1000 IU&#10;Magnesium, 200 mg&#10;Zinc&#10;Omega 3, 2 capsules">${esc(f.text)}</textarea></label>
+        <div class="sub" style="margin-top:16px">Starting points (tap to add, then edit the doses from your labels):</div>
+        <div class="actions" style="margin-top:6px">${TEMPLATES.map((t, i) => `<button class="btn secondary" type="button" data-action="template" data-index="${i}">${esc(t[0])}</button>`).join("")}</div>
+        <label class="field" style="margin-top:12px">Medications<textarea data-field="text" placeholder="Vitamin D, 1000 IU&#10;Magnesium, 200 mg&#10;Zinc&#10;Omega 3, 2 capsules">${esc(f.text)}</textarea></label>
         <div class="actions" style="margin-top:20px">
           <button class="btn big" data-action="save-quick">Add them</button>
           <button class="btn secondary big" data-action="cancel">Cancel</button>
@@ -1404,6 +1717,13 @@
         </div>`
         }
         <div class="grid" style="margin-top:12px"><label class="field">Course ends (optional)<input type="date" data-field="end_date" value="${esc(f.end_date)}"></label></div>
+        <h2 style="margin-top:16px">Food and timing</h2>
+        <div class="grid">
+          <label class="field">Food<select data-field="food_note"><option value="">No instruction</option><option value="with_food" ${f.food_note === "with_food" ? "selected" : ""}>Take with food</option><option value="empty_stomach" ${f.food_note === "empty_stomach" ? "selected" : ""}>Take on an empty stomach</option></select></label>
+          ${field("keep_apart_minutes", "Keep apart by (minutes)", 'type="number" min="15" max="720"')}
+        </div>
+        <div class="sub" style="margin:10px 0 2px">Keep apart from (for example iron and calcium):</div>
+        <div class="memberlist apartlist">${this._apartListHtml()}</div>
         <h2 style="margin-top:16px">Stock</h2>
         <div class="grid">
           ${field("quantity", "Doses left (optional)", 'type="number" min="0" step="1"')}
@@ -1462,7 +1782,33 @@
             <td>${admin ? `<button class="btn danger" style="padding:4px 10px" data-action="delete-dose" data-id="${esc(l.medication_id)}" data-taken-at="${esc(l.taken_at)}">Delete</button>` : ""}</td></tr>`
         )
         .join("");
-      return `${adherence}<div class="card"><div class="hero"><h2>Recent doses</h2><button class="btn secondary" data-action="export-csv">Export CSV</button></div><table><tr><th>When</th><th>Who</th><th>Medication</th><th class="hide-narrow">Via / by</th><th></th></tr>${rows}</table></div>`;
+      return `${adherence}<div class="card"><div class="hero"><h2>Recent doses</h2><div class="actions"><button class="btn secondary" data-action="report-open">Print report</button><button class="btn secondary" data-action="export-csv">Export CSV</button></div></div><table><tr><th>When</th><th>Who</th><th>Medication</th><th class="hide-narrow">Via / by</th><th></th></tr>${rows}</table></div>`;
+    }
+
+    _renderReport() {
+      const s = this._state;
+      const groupName = Object.fromEntries((s.groups || []).map((g) => [g.group_id, g.name]));
+      const people = new Map();
+      for (const m of s.medications) people.set(m.profile_id, m.profile_name);
+      const today = new Date().toLocaleDateString([], { day: "numeric", month: "long", year: "numeric" });
+      const body = [...people.entries()]
+        .sort((a, b) => a[1].localeCompare(b[1]))
+        .map(([pid, name]) => {
+          const rows = s.medications
+            .filter((m) => m.profile_id === pid)
+            .sort((a, b) => a.medication_name.localeCompare(b.medication_name))
+            .map((m) => {
+              const days = m.days_of_week && m.days_of_week.length ? m.days_of_week.map((d) => DAYS[d]).join(" ") : "daily";
+              const when = m.as_needed ? "As needed" : `${(m.schedules || []).join(", ")} (${m.interval_days > 1 ? "every " + m.interval_days + " days" : days})`;
+              const extra = [m.food_note ? FOOD[m.food_note] : "", m.purpose, m.instructions, m.end_date ? "until " + m.end_date : ""].filter(Boolean).join("; ");
+              return `<tr><td>${esc(m.medication_name)}</td><td>${esc(m.dosage)}</td><td>${esc(when)}</td><td>${esc(groupName[m.group_id] || "")}</td><td>${esc(extra)}</td><td>${m.as_needed ? "-" : esc(m.compliance_percentage) + "%"}</td><td>${m.as_needed ? "-" : esc(m.missed_doses)}</td></tr>`;
+            })
+            .join("");
+          return `<h3>${esc(name)}</h3><table><tr><th>Medication</th><th>Dose</th><th>When</th><th>Group</th><th>Notes</th><th>Taken on schedule</th><th>Missed</th></tr>${rows}</table>`;
+        })
+        .join("");
+      return `<div class="noprint actions" style="margin-bottom:12px"><button class="btn" data-action="print">Print or save as PDF</button><button class="btn secondary" data-action="report-close">Back</button></div>
+        <div class="card report"><h2>Medication report</h2><div class="sub">Prepared ${esc(today)}. Adherence counts doses taken on schedule over the stored history.</div>${body || "<p>No medications.</p>"}</div>`;
     }
 
     _renderSettings() {
@@ -1498,6 +1844,36 @@
           </div>
           <div class="sub" style="margin-top:8px">Quiet hours silence announcements and refill reminders. Dose reminders to your phone are never silenced.</div>
         </div>
+        <div class="card"><h2>People and weekly summary</h2>
+          <div class="sub" style="margin-bottom:12px">Send each person's reminders to their own phone. A medication or group's own phone still wins.</div>
+          ${
+            Object.keys(profiles).length
+              ? `<div class="grid">${Object.entries(profiles)
+                  .map(
+                    ([pid, name]) => `<label class="field">${esc(name)}'s phone<select data-profile-phone="${esc(pid)}" ${admin ? "" : "disabled"}>${this._notifyOptions(
+                      (d.profile_notify_services || {})[pid],
+                      "Use the default phone"
+                    )}</select></label>`
+                  )
+                  .join("")}</div>`
+              : '<div class="sub">Add a medication first.</div>'
+          }
+          <h2 style="margin-top:16px;font-size:14px">Weekly summary</h2>
+          <div class="grid">
+            <label class="field">Send it to<select data-setting="weekly_summary_service" ${admin ? "" : "disabled"}>${this._notifyOptions(d.weekly_summary_service, "Don't send")}</select></label>
+            <label class="field">On<select data-setting="weekly_summary_day" ${admin ? "" : "disabled"}>${["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map(
+              (label, i) => `<option value="${i}" ${Number(d.weekly_summary_day ?? 6) === i ? "selected" : ""}>${label} at 09:00</option>`
+            ).join("")}</select></label>
+          </div>
+        </div>
+        ${
+          admin
+            ? `<div class="card"><h2>Backup</h2>
+          <div class="sub" style="margin-bottom:12px">A copy of everything (medications, history, groups and settings) is also saved automatically every day to the <code>medication_tracker_backups</code> folder in your Home Assistant config folder, and the last 14 are kept.</div>
+          <div class="actions"><button class="btn secondary" data-action="backup-download">Download a backup</button><button class="btn secondary" data-action="backup-restore">Restore from a file…</button></div>
+          <input type="file" accept="application/json,.json" data-restore hidden></div>`
+            : ""
+        }
         <div class="card"><h2>NFC tags</h2>${scanning}
           <div class="sub" style="margin-bottom:8px">Write a tag in the Companion app (Settings → Tags), then press Scan here and tap it. A medication's own tag is set on its edit page.</div>
           <h2 style="margin-top:12px;font-size:14px">Tags that mark everything due as taken</h2>${allTags || '<div class="sub">None yet.</div>'}
