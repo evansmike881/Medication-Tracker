@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.1
+
+### Fixed
+- **Missed phone alerts.** If the phone notification could not be delivered (for example the Companion app was re-registering and its notify service did not exist), the alert was still marked as sent and never retried. Undelivered alerts are now retried every minute for up to two hours, or until the dose is taken or its window ends. The popup, announcement and event are only produced once; a repair issue still appears while delivery is failing, and clears when it works again.
+- **Recorder warnings** about attributes over 16 KB on the summary and registry sensors. The large lists stay on the live state (the dashboard card still reads them) but are no longer written to the database.
+- **Thread-safety error** (`loop ... is not the running loop`) when new entities were added after a signal sent from outside the event loop (sensors, binary sensors, buttons).
+
+### Tip
+Set a **fallback phone** in Settings so an alert can still reach a second device while the first is unavailable.
+
 ## 0.6.0
 
 ### Added

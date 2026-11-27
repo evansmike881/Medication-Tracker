@@ -30,20 +30,46 @@ def test_default_notify_service_is_used(hass, manager, engine):
     assert any(c[0] == "notify.mobile_app_default" for c in hass.services.calls)
 
 
-def test_missing_notify_service_does_not_loop_or_crash(hass, manager, engine):
+def test_failed_delivery_is_retried_until_the_phone_comes_back(hass, manager, engine):
     due_med(manager, notify_service="notify.mobile_app_gone")
     hass.services.fail_with["notify.mobile_app_gone"] = ServiceNotFound("nope")
 
     run(engine.async_process())  # must not raise
-    sends = [c for c in hass.services.calls if c[0] == "notify.mobile_app_gone"]
-    assert len(sends) == 1
-    assert any(e[0] == EVENT_DOSE_DUE for e in hass.bus.events)  # event still fires
     assert "notify_target_missing_notify_mobile_app_gone" in hass.issues  # visible in Repairs
+    due_events = lambda: [e for e in hass.bus.events if e[0] == EVENT_DOSE_DUE]
+    assert len(due_events()) == 1
 
     set_now(at(8, 1))
     run(engine.async_process())
+    set_now(at(8, 2))
+    run(engine.async_process())
     sends = [c for c in hass.services.calls if c[0] == "notify.mobile_app_gone"]
-    assert len(sends) == 1  # not retried every minute
+    assert len(sends) == 3  # retried every minute
+    assert len(due_events()) == 1  # but the event and popup are not repeated
+
+    del hass.services.fail_with["notify.mobile_app_gone"]  # phone re-registered
+    set_now(at(8, 3))
+    run(engine.async_process())
+    assert len([c for c in hass.services.calls if c[0] == "notify.mobile_app_gone"]) == 4
+    assert "notify_target_missing_notify_mobile_app_gone" not in hass.issues
+
+    set_now(at(8, 4))
+    run(engine.async_process())  # delivered, so it is now marked sent and stops
+    assert len([c for c in hass.services.calls if c[0] == "notify.mobile_app_gone"]) == 4
+
+
+def test_delivery_retries_stop_after_the_limit(hass, manager, engine, monkeypatch):
+    from mt import alerts
+
+    monkeypatch.setattr(alerts, "MAX_DELIVERY_ATTEMPTS", 5)
+
+    due_med(manager, notify_service="notify.mobile_app_gone", repeat_every_minutes=0)
+    hass.services.fail_with["notify.mobile_app_gone"] = ServiceNotFound("nope")
+    for minute in range(10):
+        set_now(at(8, 0) + __import__("datetime").timedelta(minutes=minute))
+        run(engine.async_process())
+    sends = [c for c in hass.services.calls if c[0] == "notify.mobile_app_gone" and "due" in c[1]["message"]]
+    assert len(sends) == alerts.MAX_DELIVERY_ATTEMPTS
 
 
 def test_fallback_service_used_when_primary_fails(hass, manager, engine):

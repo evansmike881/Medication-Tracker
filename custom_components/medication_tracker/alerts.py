@@ -42,6 +42,9 @@ _LOGGER = logging.getLogger(__name__)
 CRITICAL_TYPES = {"due", "missed", "escalation"}
 ALARM_CHANNEL = "alarm_stream"
 PANEL_PATH = f"/{PANEL_URL_PATH}"
+# A phone alert that could not be delivered is retried every minute for this many attempts
+# (two hours) before the tracker gives up. Covers a phone that is offline or re-registering.
+MAX_DELIVERY_ATTEMPTS = 120
 
 
 class MedicationAlertEngine:
@@ -53,6 +56,17 @@ class MedicationAlertEngine:
         self.manager = manager
         self._active_notifications: dict[str, dict[str, Any]] = {}
         self._failed_services: set[str] = set()
+        # Undelivered alerts waiting for a retry: key -> failed attempts so far.
+        self._delivery_attempts: dict[tuple, int] = {}
+
+    @staticmethod
+    def _delivery_key(alert: dict) -> tuple:
+        scheduled = alert.get("scheduled_time")
+        return (
+            alert["type"],
+            tuple(sorted(alert.get("medication_ids", [alert["medication_id"]]))),
+            scheduled.isoformat() if isinstance(scheduled, datetime) else None,
+        )
 
     async def async_process(self) -> None:
         """Process any pending alerts. One failing alert never blocks the others."""
@@ -62,19 +76,40 @@ class MedicationAlertEngine:
                 continue
             await self._async_clear(notification_id)
 
-        for alert in self.manager.get_pending_alerts():
+        pending = self.manager.get_pending_alerts()
+        # Forget retries for alerts that no longer apply (dose taken, window over).
+        live_keys = {self._delivery_key(alert) for alert in pending}
+        for key in list(self._delivery_attempts):
+            if key not in live_keys:
+                del self._delivery_attempts[key]
+
+        for alert in pending:
+            key = self._delivery_key(alert)
             try:
-                await self._async_emit_alert(alert)
+                delivered = await self._async_emit_alert(alert, retry=key in self._delivery_attempts)
             except Exception:  # noqa: BLE001 - never let one alert break the loop
                 _LOGGER.exception("Failed to process %s alert for %s", alert.get("type"), alert.get("medication_id"))
-            finally:
-                # Always mark as sent, otherwise a broken target would retry every minute.
-                for medication_id in alert.get("medication_ids", [alert["medication_id"]]):
-                    await self.manager.async_mark_alert_sent(
-                        medication_id,
-                        alert["type"],
-                        alert["scheduled_time"],
-                    )
+                delivered = True  # a bug must not turn into a retry every minute
+            if not delivered:
+                attempts = self._delivery_attempts.get(key, 0) + 1
+                if attempts < MAX_DELIVERY_ATTEMPTS:
+                    # Leave the alert unsent so the next minute tries the phone again.
+                    self._delivery_attempts[key] = attempts
+                    continue
+                _LOGGER.error(
+                    "Giving up delivering the %s alert for %s to %s after %s attempts",
+                    alert.get("type"),
+                    alert.get("medication_id"),
+                    alert.get("notify_service"),
+                    attempts,
+                )
+            self._delivery_attempts.pop(key, None)
+            for medication_id in alert.get("medication_ids", [alert["medication_id"]]):
+                await self.manager.async_mark_alert_sent(
+                    medication_id,
+                    alert["type"],
+                    alert["scheduled_time"],
+                )
         try:
             await self._async_weekly_summary()
             await self.manager.async_auto_backup()
@@ -168,22 +203,25 @@ class MedicationAlertEngine:
         async_dispatcher_send(self.hass, SIGNAL_ALERTS_UPDATED)
         return delivered
 
-    async def _async_emit_alert(self, alert: dict) -> bool:
+    async def _async_emit_alert(self, alert: dict, retry: bool = False) -> bool:
         """Create a persistent notification, push to the phone and fire an event.
 
         Returns whether a phone notification was delivered (True when none was wanted).
+        With retry=True only the phone push is attempted again; the persistent notification,
+        announcement and event were already produced on the first attempt.
         """
         message = alert["message"]
         medication_id = alert["medication_id"]
         scheduled_time = alert["scheduled_time"]
         notification_id = self._alert_notification_id(alert)
 
-        persistent_notification.async_create(
-            self.hass,
-            message=message,
-            title=alert.get("title") or "Medication Tracker",
-            notification_id=notification_id,
-        )
+        if not retry:
+            persistent_notification.async_create(
+                self.hass,
+                message=message,
+                title=alert.get("title") or "Medication Tracker",
+                notification_id=notification_id,
+            )
 
         critical = alert["type"] in CRITICAL_TYPES and bool(self.manager.settings.get(SETTING_CRITICAL, True))
         delivered = True
@@ -227,6 +265,8 @@ class MedicationAlertEngine:
             ATTR_NOTIFICATION_MESSAGE: message,
             ATTR_SCHEDULED_TIME: scheduled_time.isoformat() if isinstance(scheduled_time, datetime) else None,
         }
+        if retry:
+            return delivered
         if alert["type"] in ("due", "missed", "escalation"):
             await self._async_announce(alert)
 
