@@ -56,7 +56,8 @@ async def async_setup_entry(
         async_dispatcher_connect(
             hass,
             SIGNAL_MEDICATIONS_UPDATED,
-            lambda: async_add_entities(build_entities()),
+            # Signals can be sent from outside the event loop; entities must be added in it.
+            lambda: hass.loop.call_soon_threadsafe(lambda: async_add_entities(build_entities())),
         )
     )
 
