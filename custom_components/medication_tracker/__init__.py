@@ -297,6 +297,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
+def _async_schedule(hass: HomeAssistant, coro) -> None:
+    """Run a coroutine on the event loop, whichever thread the event listener was called from."""
+    hass.loop.call_soon_threadsafe(lambda: hass.async_create_task(coro))
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Medication Tracker from a config entry."""
     hass.data.setdefault(DOMAIN, {"logger": LOGGER})
@@ -319,12 +324,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async_register_websocket_api(hass)
     await _async_register_panel(hass)
     entry.async_on_unload(
-        hass.bus.async_listen("tag_scanned", lambda event: hass.async_create_task(_async_handle_tag_scanned(hass, event)))
+        # Events can be fired from outside the event loop (the Companion app does), so hand the
+        # work to the loop in a thread-safe way instead of calling async_create_task directly.
+        hass.bus.async_listen("tag_scanned", lambda event: _async_schedule(hass, _async_handle_tag_scanned(hass, event)))
     )
     entry.async_on_unload(
         hass.bus.async_listen(
             "mobile_app_notification_action",
-            lambda event: hass.async_create_task(_async_handle_notification_action(hass, event)),
+            lambda event: _async_schedule(hass, _async_handle_notification_action(hass, event)),
         )
     )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

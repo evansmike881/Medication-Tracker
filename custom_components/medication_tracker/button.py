@@ -32,21 +32,25 @@ BUTTON_TYPES: tuple[ButtonEntityDescription, ...] = (
     ),
     ButtonEntityDescription(
         key="test_due_notification",
+        entity_registry_enabled_default=False,
         name="Test Due Notification",
         icon="mdi:bell-ring-outline",
     ),
     ButtonEntityDescription(
         key="test_missed_notification",
+        entity_registry_enabled_default=False,
         name="Test Missed Notification",
         icon="mdi:bell-alert-outline",
     ),
     ButtonEntityDescription(
         key="test_refill_notification",
+        entity_registry_enabled_default=False,
         name="Test Refill Notification",
         icon="mdi:bottle-tonic-plus-outline",
     ),
     ButtonEntityDescription(
         key="test_caregiver_notification",
+        entity_registry_enabled_default=False,
         name="Test Caregiver Notification",
         icon="mdi:account-alert-outline",
     ),

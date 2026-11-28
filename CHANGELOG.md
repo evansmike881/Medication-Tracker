@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.3
+
+### Fixed
+- **Phone notification buttons did nothing** (All taken, Taken, Snooze, Skip). The Companion app fires the button event from outside the event loop, and Home Assistant rejected the handler with a thread-safety error, so the tap was lost. The handler is now scheduled safely. The same fix is applied to NFC tag scans.
+
+## 0.6.2
+
+### Changed
+- The four **Test ... Notification** buttons per medication are now disabled by default, which removes about 70 entities from a typical install. Enable one from the entity settings when you want to test. Buttons that already exist are not changed; disable them in Settings -> Entities if you do not want them.
+
 ## 0.6.1
 
 ### Fixed
