@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.3
+
+### Fixed
+- **Phone notification buttons did nothing** (All taken, Taken, Snooze, Skip). The Companion app fires the button event from outside the event loop, and Home Assistant rejected the handler with a thread-safety error, so the tap was lost. The handler is now scheduled safely. The same fix is applied to NFC tag scans.
+
 ## 0.6.2
 
 ### Changed
